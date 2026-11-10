@@ -1,0 +1,6 @@
+{
+  "appId": "com.kamii.macroexecutor",
+  "appName": "MacroExecutor",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
