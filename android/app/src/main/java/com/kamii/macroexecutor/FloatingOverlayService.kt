@@ -4,11 +4,13 @@ import android.app.*
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.TypedValue
 import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
@@ -58,6 +60,10 @@ class FloatingOverlayService : Service() {
             .build()
     }
 
+    private fun dpToPx(dp: Int): Int {
+        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), resources.displayMetrics).toInt()
+    }
+
     private fun createOverlay() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -69,33 +75,43 @@ class FloatingOverlayService : Service() {
         params.gravity = Gravity.TOP or Gravity.START
         params.x = 100; params.y = 200
 
+        // Main Container (Dark, Semi-transparent, Pill-shaped)
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(0xCC222222.toInt())
-            setPadding(24, 12, 24, 12)
             gravity = Gravity.CENTER_VERTICAL
-            // Rounded corners
-            val shape = GradientDrawable()
-            shape.shape = GradientDrawable.RECTANGLE
-            shape.cornerRadius = 50f
-            shape.setColor(0xCC222222.toInt())
-            background = shape
+            setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10))
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(50).toFloat()
+                setColor(Color.parseColor("#E6121215")) // Sleek dark gray with 90% opacity
+                setStroke(dpToPx(1), Color.parseColor("#333333")) // Subtle border
+            }
+            background = bg
+            elevation = dpToPx(8).toFloat()
         }
 
-        // Status Dot (Green = Running, Red = Stopped, Yellow = Armed)
-        val dotShape = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.RED) }
+        // Status Dot
+        val dotBg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor("#FF4444")) // Red
+            setStroke(dpToPx(2), Color.parseColor("#33FFFFFF")) // White ring
+        }
         statusDot = View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(24, 24).apply { marginEnd = 24 }
-            background = dotShape
+            layoutParams = LinearLayout.LayoutParams(dpToPx(14), dpToPx(14)).apply { marginEnd = dpToPx(12) }
+            background = dotBg
         }
 
         // Mode Switcher (TGL / 1X / ARM)
         modeBtn = TextView(this).apply {
             text = "TGL"
-            setTextColor(Color.WHITE)
-            textSize = 12f
-            setPadding(32, 16, 32, 16)
-            val bg = GradientDrawable().apply { cornerRadius = 30f; setColor(0xFF444444.toInt()) }
+            setTextColor(Color.parseColor("#AAAAAA"))
+            textSize = 11f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
+            val bg = GradientDrawable().apply {
+                cornerRadius = dpToPx(20).toFloat()
+                setColor(Color.parseColor("#2A2A30"))
+            }
             background = bg
             setOnClickListener {
                 currentMode = (currentMode + 1) % 3
@@ -103,44 +119,58 @@ class FloatingOverlayService : Service() {
             }
         }
 
-        // Action Button
+        // Action Button (Play/Stop/Arm/Fire)
         actionBtn = TextView(this).apply {
             text = "PLAY"
             setTextColor(Color.WHITE)
-            textSize = 16f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setPadding(48, 16, 48, 16)
-            val bg = GradientDrawable().apply { cornerRadius = 30f; setColor(0xFF4CAF50.toInt()) }
+            textSize = 14f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setPadding(dpToPx(20), dpToPx(6), dpToPx(20), dpToPx(6))
+            val bg = GradientDrawable().apply {
+                cornerRadius = dpToPx(20).toFloat()
+                setColor(Color.parseColor("#4CAF50"))
+            }
             background = bg
             setOnClickListener { handleActionClick() }
         }
 
-        val spacer = View(this).apply { layoutParams = LinearLayout.LayoutParams(24, 1) }
+        val spacer = View(this).apply { layoutParams = LinearLayout.LayoutParams(dpToPx(8), 1) }
 
         container.addView(statusDot)
         container.addView(modeBtn)
         container.addView(spacer)
         container.addView(actionBtn)
 
-        // Draggable logic
+        // Smooth Drag Logic
         container.setOnTouchListener(object : View.OnTouchListener {
             private var initialX = 0
             private var initialY = 0
             private var initialTouchX = 0f
             private var initialTouchY = 0f
+            private var isDragging = false
 
             override fun onTouch(v: View?, event: MotionEvent): Boolean {
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
                         initialX = params.x; initialY = params.y
                         initialTouchX = event.rawX; initialTouchY = event.rawY
+                        isDragging = false
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        params.x = initialX + (event.rawX - initialTouchX).toInt()
-                        params.y = initialY + (event.rawY - initialTouchY).toInt()
-                        windowManager.updateViewLayout(overlayView, params)
+                        val dx = (event.rawX - initialTouchX).toInt()
+                        val dy = (event.rawY - initialTouchY).toInt()
+                        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) isDragging = true
+                        if (isDragging) {
+                            params.x = initialX + dx
+                            params.y = initialY + dy
+                            windowManager.updateViewLayout(overlayView, params)
+                        }
                         return true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        // If we weren't dragging, let the button clicks handle themselves
+                        return isDragging
                     }
                 }
                 return false
@@ -154,13 +184,13 @@ class FloatingOverlayService : Service() {
 
     private fun handleActionClick() {
         when (currentMode) {
-            0 -> { // Toggle Mode
+            0 -> { // TGL Mode
                 if (!isRunning) startScript() else { isRunning = false; QuickJsMacroRunner.stop() }
             }
-            1 -> { // Single Press Mode
+            1 -> { // 1X Mode
                 if (!isRunning) startScript()
             }
-            2 -> { // Arm / Fire Mode
+            2 -> { // ARM Mode
                 if (!isArmed) {
                     isArmed = true
                     if (!isRunning) startScript()
@@ -177,9 +207,7 @@ class FloatingOverlayService : Service() {
     private fun startScript() {
         isRunning = true
         val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: """
-            log("No script loaded. Defaulting to a 1-second wait and tap.");
-            await sleep(1000);
-            host.tap(540, 960);
+            log("No script loaded.");
         """.trimIndent()
 
         QuickJsMacroRunner.execute(this, scriptToRun, object : QuickJsMacroRunner.Listener {
@@ -204,20 +232,20 @@ class FloatingOverlayService : Service() {
             0 -> { // Toggle
                 modeBtn.text = "TGL"
                 actionBtn.text = if (isRunning) "STOP" else "PLAY"
-                (actionBtn.background as? GradientDrawable)?.setColor(if (isRunning) Color.RED else Color.parseColor("#4CAF50"))
-                (statusDot.background as? GradientDrawable)?.setColor(if (isRunning) Color.GREEN else Color.RED)
+                (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor(if (isRunning) "#EF4444" else "#4CAF50"))
+                (statusDot.background as? GradientDrawable)?.setColor(Color.parseColor(if (isRunning) "#4CAF50" else "#FF4444"))
             }
             1 -> { // Single Press
                 modeBtn.text = "1X"
                 actionBtn.text = "RUN"
-                (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#2196F3"))
-                (statusDot.background as? GradientDrawable)?.setColor(if (isRunning) Color.GREEN else Color.RED)
+                (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#3B82F6"))
+                (statusDot.background as? GradientDrawable)?.setColor(Color.parseColor(if (isRunning) "#4CAF50" else "#FF4444"))
             }
             2 -> { // Arm / Fire
                 modeBtn.text = "ARM"
                 actionBtn.text = if (isArmed) "FIRE" else "ARM"
-                (actionBtn.background as? GradientDrawable)?.setColor(if (isArmed) Color.RED else Color.parseColor("#FF9800"))
-                (statusDot.background as? GradientDrawable)?.setColor(if (isArmed) Color.YELLOW else Color.RED)
+                (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor(if (isArmed) "#EF4444" else "#F59E0B"))
+                (statusDot.background as? GradientDrawable)?.setColor(Color.parseColor(if (isArmed) "#F59E0B" else "#FF4444"))
             }
         }
     }
