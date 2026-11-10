@@ -1,5 +1,33 @@
-// Option A (Recommended - actively maintained, matches your io.* imports)
-implementation 'io.github.taoweiji.quickjs:quickjs-android:1.4.6'
+android {
+    namespace "com.kamii.macroexecutor"
+    compileSdk 34
 
-// Option B (Original cashapp, if you prefer)
-// implementation 'app.cash.quickjs:quickjs-android:0.9.1'
+    defaultConfig {
+        applicationId "com.kamii.macroexecutor"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -frtti -fexceptions"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1" // Fix #3 from spec
+        }
+    }
+
+    ndkVersion "26.1.10909125" // Spec requirement
+}
+
+dependencies {
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")) // Fix #4
+    implementation 'io.github.taoweiji.quickjs:quickjs-android:1.4.6'
+    // ... other Capacitor defaults
+}
