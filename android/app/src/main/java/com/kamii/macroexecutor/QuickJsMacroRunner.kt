@@ -7,11 +7,16 @@ import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 object QuickJsMacroRunner {
-    private var job: Job? = null
+
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var job: Job? = null
     private var webView: WebView? = null
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -24,42 +29,58 @@ object QuickJsMacroRunner {
                 settings.allowContentAccess = false
                 webViewClient = WebViewClient()
                 addJavascriptInterface(MacroHost(), "host")
-                loadDataWithBaseURL(null, "<html><body></body></html>", "text/html", "UTF-8", null)
+                loadDataWithBaseURL(
+                    null,
+                    "<html><body></body></html>",
+                    "text/html",
+                    "UTF-8",
+                    null
+                )
             }
             webView = wv
 
-            // Give WebView a moment to initialise its JS engine, then evaluate
             wv.postDelayed({
                 if (job?.isActive == true) {
                     wv.evaluateJavascript(script, null)
                 }
-            }, 300)
+            }, 300L)
         }
     }
 
     fun stop() {
         job?.cancel()
         job = null
-        webView?.let { wv ->
-            Handler(Looper.getMainLooper()).post { wv.destroy() }
-        }
+        val wv = webView
         webView = null
+        if (wv != null) {
+            Handler(Looper.getMainLooper()).post {
+                runCatching { wv.destroy() }
+            }
+        }
     }
 
     class MacroHost {
+
         @JavascriptInterface
         fun tap(x: Int, y: Int) {
-            MacroAccessibilityService.instance?.performTap(x, y, 50)
+            MacroAccessibilityService.instance?.performTap(x.toFloat(), y.toFloat(), 50L)
         }
 
         @JavascriptInterface
         fun longPress(x: Int, y: Int, ms: Int) {
-            MacroAccessibilityService.instance?.performLongPress(x, y, ms.toLong())
+            MacroAccessibilityService.instance
+                ?.performLongPress(x.toFloat(), y.toFloat(), ms.toLong())
         }
 
         @JavascriptInterface
         fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, duration: Int) {
-            MacroAccessibilityService.instance?.performSwipe(x1, y1, x2, y2, duration.toLong())
+            MacroAccessibilityService.instance?.performSwipe(
+                x1.toFloat(),
+                y1.toFloat(),
+                x2.toFloat(),
+                y2.toFloat(),
+                duration.toLong()
+            )
         }
 
         @JavascriptInterface
@@ -73,11 +94,21 @@ object QuickJsMacroRunner {
         @JavascriptInterface
         fun matchPixels(csv: String, tolerance: Int): Boolean {
             val parts = csv.split(",").map { it.trim().toInt() }
-            return ScreenCaptureHolder.matchPixels(IntArray(parts.size) { parts[it] }, tolerance)
+            return ScreenCaptureHolder.matchPixels(
+                IntArray(parts.size) { parts[it] },
+                tolerance
+            )
         }
 
         @JavascriptInterface
-        fun findColor(x1: Int, y1: Int, x2: Int, y2: Int, hex: String, tolerance: Int): String {
+        fun findColor(
+            x1: Int,
+            y1: Int,
+            x2: Int,
+            y2: Int,
+            hex: String,
+            tolerance: Int
+        ): String {
             val color = hex.removePrefix("#").toLong(16).toInt()
             return ScreenCaptureHolder.findColor(x1, y1, x2, y2, color, tolerance)
                 ?.let { "${it.first},${it.second}" } ?: "-1,-1"
