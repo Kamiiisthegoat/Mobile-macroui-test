@@ -15,6 +15,7 @@ import { AndroidArchitectureModal } from './components/AndroidArchitectureModal'
 import { AccessibilityModal } from './components/AccessibilityModal';
 import { PerformanceMetricsView } from './components/PerformanceMetricsView';
 import { ExportImportModal } from './components/ExportImportModal';
+import { MacroControlPanel } from './components/MacroControlPanel';
 
 import {
   MacroConfig,
@@ -372,6 +373,9 @@ export default function App() {
               multiLanguage={multiLanguage}
               onToggleMultiLanguage={setMultiLanguage}
             />
+
+            {/* Native MacroBridge Control Panel (Accessibility / Overlay / Screen Capture / QuickJS) */}
+            <MacroControlPanel />
 
             {/* Timing & Speed Settings (Delay between macros in ms) */}
             <SpeedControls
