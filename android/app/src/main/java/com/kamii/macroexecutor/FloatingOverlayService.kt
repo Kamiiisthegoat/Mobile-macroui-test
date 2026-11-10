@@ -18,7 +18,6 @@ import androidx.core.app.NotificationCompat
 class FloatingOverlayService : Service() {
 
     companion object {
-        // 🔥 Allows JavaScript to access the overlay globally
         @Volatile
         var instance: FloatingOverlayService? = null
             private set
@@ -35,7 +34,7 @@ class FloatingOverlayService : Service() {
     private lateinit var statusDot: View
     private lateinit var modeBtn: TextView
     private lateinit var actionBtn: TextView
-    private lateinit var statusText: TextView // 🔥 Added for JS messages
+    private lateinit var statusText: TextView
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -110,7 +109,6 @@ class FloatingOverlayService : Service() {
             background = dotBg
         }
 
-        // Text field for JS to write status (e.g., "Scanning...")
         statusText = TextView(this).apply {
             text = ""
             setTextColor(Color.parseColor("#AAAAAA"))
@@ -151,7 +149,7 @@ class FloatingOverlayService : Service() {
         }
 
         container.addView(statusDot)
-        container.addView(statusText) // Added text
+        container.addView(statusText)
         container.addView(modeBtn)
         container.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dpToPx(8), 1) })
         container.addView(actionBtn)
@@ -193,7 +191,6 @@ class FloatingOverlayService : Service() {
         updateUI()
     }
 
-    // 🔥 NEW METHODS FOR JAVASCRIPT TO CALL
     fun setOverlayText(text: String) {
         mainHandler.post { statusText.text = text }
     }
@@ -239,15 +236,28 @@ class FloatingOverlayService : Service() {
 
     private fun startScript() {
         isRunning = true
-        setOverlayText("") // Clear old text
+        setOverlayText("Starting...")
         val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: "log('No script loaded.');"
         
         QuickJsMacroRunner.execute(this, scriptToRun, object : QuickJsMacroRunner.Listener {
             override fun onStarted() {}
             override fun onLog(message: String) {}
+            
             override fun onCompleted() { resetUi() }
             override fun onStopped() { resetUi() }
-            override fun onError(message: String, stack: String?) { resetUi() }
+            
+            // 🔥 IF THERE IS AN ERROR, SHOW IT ON THE FLOATY!
+            override fun onError(message: String, stack: String?) { 
+                mainHandler.post {
+                    isRunning = false
+                    isArmed = false
+                    setOverlayText("Error: $message")
+                    (statusDot.background as? GradientDrawable)?.setColor(Color.RED)
+                    updateUI()
+                    // Wait 3 seconds so you can read the error, then clear it
+                    mainHandler.postDelayed({ statusText.text = "" }, 3000)
+                }
+            }
         })
     }
 
