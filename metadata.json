@@ -1,0 +1,6 @@
+{
+  "name": "MacroExecutor - Multi-Language Automation & Game Macro Suite",
+  "description": "High-speed multi-language macro execution engine for C++, Luau, QuickJS, JavaScript, and Kotlin with floating HUD, coordinate picker, and pixel color detection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
