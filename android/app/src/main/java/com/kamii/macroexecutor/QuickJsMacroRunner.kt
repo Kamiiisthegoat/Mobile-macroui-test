@@ -1,6 +1,7 @@
 package com.kamii.macroexecutor
 
 import android.os.SystemClock
+import io.github.taoweiji.quickjs.JSArray
 import io.github.taoweiji.quickjs.JSContext
 import io.github.taoweiji.quickjs.JSObject
 import io.github.taoweiji.quickjs.QuickJS
@@ -50,7 +51,7 @@ object QuickJsMacroRunner {
                 ) ?: false
             }, "swipe")
 
-            // sleep(ms) — sliced so stop() takes effect promptly
+            // sleep(ms)
             host.registerJavaMethod({ _, args ->
                 val ms = args.getLong(0)
                 var remaining = ms
@@ -64,8 +65,8 @@ object QuickJsMacroRunner {
 
             // getPixel(x, y) -> ARGB jint
             host.registerJavaMethod({ _, args ->
-                val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod 0
-                val image = reader.acquireLatestImage() ?: return@registerJavaMethod 0
+                val reader = ScreenCaptureHolder.imageReader ?: return 0
+                val image = reader.acquireLatestImage() ?: return 0
                 try {
                     val plane = image.planes[0]
                     NativePixelEngine.getPixelColor(
@@ -83,15 +84,14 @@ object QuickJsMacroRunner {
 
             // matchPixels(tripletsFlatArray, tolerance) -> Boolean
             host.registerJavaMethod({ _, args ->
-                val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod false
-                val image = reader.acquireLatestImage() ?: return@registerJavaMethod false
+                val reader = ScreenCaptureHolder.imageReader ?: return false
+                val image = reader.acquireLatestImage() ?: return false
                 try {
                     val plane = image.planes[0]
-                    val jsArray = args.getObject(0) as? JSObject
-                        ?: return@registerJavaMethod false
-                    val len = jsArray.get("length").toInt()
+                    val jsArray = args.get(0) as? JSArray ?: return false
+                    val len = jsArray.length()
                     val triplets = IntArray(len) { i ->
-                        jsArray.get(i.toString()).toInt()
+                        jsArray.getInteger(i)
                     }
                     val tolerance = args.getInteger(1)
                     NativePixelEngine.matchMultiPixels(
@@ -109,8 +109,8 @@ object QuickJsMacroRunner {
 
             // findColor(x1, y1, x2, y2, argbColor, tolerance) -> packed (x<<16)|y, or -1
             host.registerJavaMethod({ _, args ->
-                val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod -1
-                val image = reader.acquireLatestImage() ?: return@registerJavaMethod -1
+                val reader = ScreenCaptureHolder.imageReader ?: return -1
+                val image = reader.acquireLatestImage() ?: return -1
                 try {
                     val plane = image.planes[0]
                     NativePixelEngine.findColorInRegion(
@@ -141,4 +141,4 @@ object QuickJsMacroRunner {
             running = false
         }
     }
-}
+} 
