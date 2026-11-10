@@ -16,14 +16,9 @@ object ScreenCaptureHolder {
     @Volatile var width: Int = 0
     @Volatile var height: Int = 0
 
-    /**
-     * Property (not function) — matches `ScreenCaptureHolder.isReady` in
-     * MacroBridgePlugin and the WebView-based MacroHost.
-     */
     val isReady: Boolean
         get() = imageReader != null && width > 0 && height > 0
 
-    /** Called by ScreenCaptureService after the VirtualDisplay is created. */
     fun setImageReader(reader: ImageReader, w: Int, h: Int) {
         imageReader = reader
         width = w
@@ -41,8 +36,6 @@ object ScreenCaptureHolder {
         height = 0
     }
 
-    // ── Pixel engine bridges ────────────────────────────────
-
     fun getPixel(x: Int, y: Int): Int {
         val reader = imageReader ?: return 0
         val image = try {
@@ -52,14 +45,14 @@ object ScreenCaptureHolder {
         } ?: return 0
 
         return try {
-            // Mandatory: index plane zero explicitly (Kotlin Array<Image.Plane>).
             val plane = image.planes[0]
             NativePixelEngine.getPixelColor(
                 plane.buffer,
                 image.width,
                 image.height,
                 plane.rowStride,
-                x, y
+                x,
+                y
             )
         } catch (e: Exception) {
             Log.w(TAG, "getPixel failed at ($x,$y)", e); 0
@@ -111,13 +104,17 @@ object ScreenCaptureHolder {
 
         return try {
             val plane = image.planes[0]
-            val packed = NativePixelEngine.findColorInRegion(
+            val packed: Long = NativePixelEngine.findColorInRegion(
                 plane.buffer,
                 image.width,
                 image.height,
                 plane.rowStride,
-                startX, startY, endX, endY,
-                color, tolerance
+                startX,
+                startY,
+                endX,
+                endY,
+                color,
+                tolerance
             )
             if (packed == -1L) null
             else Pair((packed shr 32).toInt(), (packed and 0xFFFFFFFFL).toInt())
