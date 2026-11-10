@@ -160,7 +160,7 @@ object QuickJsMacroRunner {
             }
             val ok = svc.performTap(x.toFloat(), y.toFloat(), 50L)
             if (ok) log("✅ Dispatched tap to ($x, $y)")
-            else log("❌ Failed to dispatch tap to ($x, $y). Does the screen have FLAG_SECURE enabled?")
+            else log("❌ Failed to dispatch tap. Does the screen have FLAG_SECURE enabled?")
         }
 
         @JavascriptInterface
