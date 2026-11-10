@@ -1,10 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project("macroengine" LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+project("macroengine")
 
 add_library(macroengine SHARED pixel_engine.cpp)
-
-find_library(log-lib log)
-target_link_libraries(macroengine ${log-lib})
+target_link_libraries(macroengine log)
