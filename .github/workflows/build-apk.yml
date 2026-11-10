@@ -8,502 +8,66 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
 
-      - name: Setup Java 21
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '21'
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21' # Fix #3: Capacitor requires Java 21
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+    - name: Install npm dependencies
+      run: |
+        npm install --legacy-peer-deps # Fix #2: Peer dependency conflict
+        npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
 
-      - name: Install NDK and CMake
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager --install "ndk;25.1.8937393" "cmake;3.22.1"
+    - name: Build Web Assets
+      run: npm run build
 
-      - name: Install npm dependencies
-        run: |
-          npm install --legacy-peer-deps
-          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+    - name: Preserve Custom Android Source
+      run: |
+        mkdir -p /tmp/custom_src
+        cp -r android/app/src/main/* /tmp/custom_src/ || true
 
-      - name: Build Vite web app
-        run: npm run build
+    - name: Generate Fresh Capacitor Android Project
+      run: |
+        rm -rf android
+        npx cap add android
+        # Fix #1: Restore custom files
+        cp -r /tmp/custom_src/* android/app/src/main/
 
-      - name: Backup custom native sources
-        run: |
-          if [ -d android/app/src/main ]; then
-            mkdir -p /tmp/custom-main
-            cp -R android/app/src/main/. /tmp/custom-main/
-            echo "Backed up custom main sources."
-          fi
+    - name: Inject Kotlin BOM & Dependencies
+      run: |
+        # Fix #4: Duplicate class fix via Kotlin BOM
+        cat << 'EOF' >> android/app/build.gradle
+        
+        dependencies {
+            implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.9.22"))
+            implementation 'io.github.taoweiji.quickjs:quickjs-android:1.4.6'
+            // Add any other custom dependencies here
+        }
+        EOF
 
-      - name: Remove placeholder android directory
-        run: rm -rf android
+    - name: Sync Capacitor
+      run: npx cap sync android
 
-      - name: Add Capacitor Android platform
-        run: npx cap add android
+    - name: Make Gradlew Executable
+      run: chmod +x android/gradlew
 
-      - name: Restore custom native sources
-        run: |
-          if [ -d /tmp/custom-main ]; then
-            cp -R /tmp/custom-main/. android/app/src/main/
-            echo "Custom native sources restored."
-          fi
+    - name: Build Debug APK
+      working-directory: android
+      run: ./gradlew assembleDebug
 
-      - name: Ensure strings.xml has accessibility_description
-        run: |
-          STRINGS=android/app/src/main/res/values/strings.xml
-          mkdir -p "$(dirname "$STRINGS")"
-          if [ -f "$STRINGS" ]; then
-            if ! grep -q 'accessibility_description' "$STRINGS"; then
-              sed -i '/<\/resources>/i\    <string name="accessibility_description">MacroExecutor uses the Accessibility Service to replay taps and swipes.</string>' "$STRINGS"
-            fi
-          else
-            cat > "$STRINGS" << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">MacroExecutor</string>
-              <string name="title_activity_main">MacroExecutor</string>
-              <string name="accessibility_description">MacroExecutor uses the Accessibility Service to replay taps and swipes.</string>
-          </resources>
-          EOF
-          fi
-
-      # ── 1. Overwrite QuickJsMacroRunner.kt (Safest possible Kotlin syntax) ──
-      - name: Patch QuickJsMacroRunner.kt
-        run: |
-          cat > android/app/src/main/java/com/kamii/macroexecutor/QuickJsMacroRunner.kt << 'EOF'
-          package com.kamii.macroexecutor
-
-          import android.os.SystemClock
-          import io.github.taoweiji.quickjs.JSContext
-          import io.github.taoweiji.quickjs.JSObject
-          import io.github.taoweiji.quickjs.QuickJS
-          import kotlinx.coroutines.Dispatchers
-          import kotlinx.coroutines.withContext
-
-          object QuickJsMacroRunner {
-
-              @Volatile
-              private var running = false
-
-              fun isRunning(): Boolean = running
-
-              fun stop() {
-                  running = false
-              }
-
-              suspend fun execute(script: String): String = withContext(Dispatchers.Default) {
-                  if (running) return@withContext "ERROR: already running"
-                  running = true
-
-                  var runtime: QuickJS? = null
-                  var context: JSContext? = null
-
-                  try {
-                      runtime = QuickJS.createRuntime()
-                      context = runtime.createContext()
-
-                      val host = JSObject(context)
-
-                      host.registerJavaMethod({ _, args ->
-                          val x = (args.get(0) as? Number)?.toFloat() ?: 0f
-                          val y = (args.get(1) as? Number)?.toFloat() ?: 0f
-                          val d = if (args.length() > 2) (args.get(2) as? Number)?.toLong() ?: 50L else 50L
-                          MacroAccessibilityService.instance?.performTap(x, y, d) ?: false
-                      }, "tap")
-
-                      host.registerJavaMethod({ _, args ->
-                          val x1 = (args.get(0) as? Number)?.toFloat() ?: 0f
-                          val y1 = (args.get(1) as? Number)?.toFloat() ?: 0f
-                          val x2 = (args.get(2) as? Number)?.toFloat() ?: 0f
-                          val y2 = (args.get(3) as? Number)?.toFloat() ?: 0f
-                          val d = (args.get(4) as? Number)?.toLong() ?: 100L
-                          MacroAccessibilityService.instance?.performSwipe(x1, y1, x2, y2, d) ?: false
-                      }, "swipe")
-
-                      host.registerJavaMethod({ _, args ->
-                          val ms = (args.get(0) as? Number)?.toLong() ?: 0L
-                          var remaining = ms
-                          while (remaining > 0 && running) {
-                              val chunk = minOf(remaining, 50L)
-                              SystemClock.sleep(chunk)
-                              remaining -= chunk
-                          }
-                          running
-                      }, "sleep")
-
-                      host.registerJavaMethod({ _, args ->
-                          val reader = ScreenCaptureHolder.imageReader
-                          val image = reader?.acquireLatestImage()
-                          if (image != null) {
-                              try {
-                                  val x = (args.get(0) as? Number)?.toInt() ?: 0
-                                  val y = (args.get(1) as? Number)?.toInt() ?: 0
-                                  NativePixelEngine.getPixelColor(
-                                      image.planes[0].buffer,
-                                      image.width,
-                                      image.height,
-                                      image.planes[0].rowStride,
-                                      x, y
-                                  )
-                              } finally {
-                                  image.close()
-                              }
-                          } else {
-                              0
-                          }
-                      }, "getPixel")
-
-                      host.registerJavaMethod({ _, args ->
-                          val reader = ScreenCaptureHolder.imageReader
-                          val image = reader?.acquireLatestImage()
-                          if (image != null) {
-                              try {
-                                  val len = args.length()
-                                  if (len < 4 || (len - 1) % 3 != 0) {
-                                      false
-                                  } else {
-                                      val tolerance = (args.get(len - 1) as? Number)?.toInt() ?: 10
-                                      val triplets = IntArray(len - 1) { i -> (args.get(i) as? Number)?.toInt() ?: 0 }
-                                      NativePixelEngine.matchMultiPixels(
-                                          image.planes[0].buffer,
-                                          image.width,
-                                          image.height,
-                                          image.planes[0].rowStride,
-                                          triplets,
-                                          tolerance
-                                      )
-                                  }
-                              } finally {
-                                  image.close()
-                              }
-                          } else {
-                              false
-                          }
-                      }, "matchPixels")
-
-                      host.registerJavaMethod({ _, args ->
-                          val reader = ScreenCaptureHolder.imageReader
-                          val image = reader?.acquireLatestImage()
-                          if (image != null) {
-                              try {
-                                  val x1 = (args.get(0) as? Number)?.toInt() ?: 0
-                                  val y1 = (args.get(1) as? Number)?.toInt() ?: 0
-                                  val x2 = (args.get(2) as? Number)?.toInt() ?: 0
-                                  val y2 = (args.get(3) as? Number)?.toInt() ?: 0
-                                  val color = (args.get(4) as? Number)?.toInt() ?: 0
-                                  val tol = (args.get(5) as? Number)?.toInt() ?: 10
-                                  NativePixelEngine.findColorInRegion(
-                                      image.planes[0].buffer,
-                                      image.width,
-                                      image.height,
-                                      image.planes[0].rowStride,
-                                      x1, y1, x2, y2, color, tol
-                                  )
-                              } finally {
-                                  image.close()
-                              }
-                          } else {
-                              -1
-                          }
-                      }, "findColor")
-
-                      context.set("MacroHost", host)
-                      context.executeVoidScript(script, "macro.js")
-                      "OK"
-                  } catch (t: Throwable) {
-                      "ERROR: ${t.javaClass.simpleName}: ${t.message}"
-                  } finally {
-                      runCatching { context?.close() }
-                      runCatching { runtime?.close() }
-                      running = false
-                  }
-              }
-          }
-          EOF
-          echo "Patched QuickJsMacroRunner.kt"
-
-      # ── 2. Overwrite FloatingOverlayService.kt ──
-      - name: Patch FloatingOverlayService.kt
-        run: |
-          cat > android/app/src/main/java/com/kamii/macroexecutor/FloatingOverlayService.kt << 'EOF'
-          package com.kamii.macroexecutor
-
-          import android.app.Service
-          import android.content.Context
-          import android.content.Intent
-          import android.graphics.Color
-          import android.graphics.PixelFormat
-          import android.graphics.drawable.GradientDrawable
-          import android.os.Build
-          import android.os.IBinder
-          import android.provider.Settings
-          import android.view.Gravity
-          import android.view.MotionEvent
-          import android.view.View
-          import android.view.WindowManager
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import kotlin.math.abs
-
-          class FloatingOverlayService : Service() {
-
-              companion object {
-                  @Volatile var isRunning: Boolean = false
-                      private set
-
-                  fun canDrawOverlays(context: Context): Boolean =
-                      Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
-
-                  fun start(context: Context) {
-                      if (!canDrawOverlays(context)) return
-                      context.startService(Intent(context, FloatingOverlayService::class.java))
-                  }
-
-                  fun stop(context: Context) {
-                      context.stopService(Intent(context, FloatingOverlayService::class.java))
-                  }
-              }
-
-              private lateinit var windowManager: WindowManager
-              private var overlayView: View? = null
-              private lateinit var params: WindowManager.LayoutParams
-              private lateinit var statusDot: TextView
-              private lateinit var statusLabel: TextView
-
-              override fun onCreate() {
-                  super.onCreate()
-                  isRunning = true
-                  windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                  createOverlay()
-              }
-
-              private fun createOverlay() {
-                  val dp = resources.displayMetrics.density
-                  fun Int.dp() = (this * dp).toInt()
-
-                  val container = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      setPadding(12.dp(), 8.dp(), 12.dp(), 8.dp())
-                      background = GradientDrawable().apply {
-                          cornerRadius = 24f * dp
-                          setColor(Color.parseColor("#CC1E1E2E"))
-                          setStroke(2.dp(), Color.parseColor("#555566"))
-                      }
-                  }
-
-                  statusDot = TextView(this).apply {
-                      text = "\u25CF"
-                      textSize = 14f
-                      setTextColor(Color.parseColor("#888899"))
-                      setPadding(0, 0, 6.dp(), 0)
-                  }
-
-                  statusLabel = TextView(this).apply {
-                      text = "START"
-                      textSize = 12f
-                      setTextColor(Color.WHITE)
-                      setPadding(0, 0, 10.dp(), 0)
-                  }
-
-                  val stopButton = TextView(this).apply {
-                      text = "STOP"
-                      textSize = 12f
-                      setTextColor(Color.parseColor("#FF6B6B"))
-                      setPadding(6.dp(), 0, 0, 0)
-                  }
-
-                  container.addView(statusDot)
-                  container.addView(statusLabel)
-                  container.addView(stopButton)
-
-                  params = WindowManager.LayoutParams(
-                      WindowManager.LayoutParams.WRAP_CONTENT,
-                      WindowManager.LayoutParams.WRAP_CONTENT,
-                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                      } else {
-                          @Suppress("DEPRECATION")
-                          WindowManager.LayoutParams.TYPE_PHONE
-                      },
-                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                              WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                      PixelFormat.TRANSLUCENT
-                  ).apply {
-                      gravity = Gravity.TOP or Gravity.START
-                      x = 24.dp()
-                      y = 240.dp()
-                  }
-
-                  var initialX = 0
-                  var initialY = 0
-                  var initialTouchX = 0f
-                  var initialTouchY = 0f
-                  var moved = false
-
-                  container.setOnTouchListener { _, event ->
-                      when (event.action) {
-                          MotionEvent.ACTION_DOWN -> {
-                              initialX = params.x
-                              initialY = params.y
-                              initialTouchX = event.rawX
-                              initialTouchY = event.rawY
-                              moved = false
-                              true
-                          }
-                          MotionEvent.ACTION_MOVE -> {
-                              val dx = (event.rawX - initialTouchX).toInt()
-                              val dy = (event.rawY - initialTouchY).toInt()
-                              if (abs(dx) > 10 || abs(dy) > 10) moved = true
-                              params.x = (initialX + dx).coerceAtLeast(0)
-                              params.y = (initialY + dy).coerceAtLeast(0)
-                              windowManager.updateViewLayout(container, params)
-                              true
-                          }
-                          MotionEvent.ACTION_UP -> {
-                              if (!moved) {
-                                  if (event.rawX > container.width * 0.55f) {
-                                      QuickJsMacroRunner.stop()
-                                      updateStatus("STOPPED", "#FF6B6B")
-                                  } else {
-                                      updateStatus("READY", "#4CAF50")
-                                  }
-                              }
-                              true
-                          }
-                          else -> false
-                      }
-                  }
-
-                  overlayView = container
-                  windowManager.addView(container, params)
-              }
-
-              private fun updateStatus(label: String, colorHex: String) {
-                  statusLabel.text = label
-                  statusDot.setTextColor(Color.parseColor(colorHex))
-              }
-
-              override fun onDestroy() {
-                  overlayView?.let {
-                      runCatching { windowManager.removeView(it) }
-                  }
-                  overlayView = null
-                  isRunning = false
-                  super.onDestroy()
-              }
-
-              override fun onBind(intent: Intent?): IBinder? = null
-          }
-          EOF
-          echo "Patched FloatingOverlayService.kt"
-
-      # ── 3. Patch Gradle Memory Settings ──
-      - name: Configure Gradle Memory Limits
-        run: |
-          cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+UseG1GC
-          kotlin.compiler.execution.strategy=in-process
-          android.useAndroidX=true
-          android.enableJetifier=true
-          EOF
-          echo "Configured Gradle to run Kotlin compiler in-process with 4GB heap."
-
-      # ── 4. Patch Root Gradle for Kotlin 2.0.21 ──
-      - name: Patch root Gradle file
-        run: |
-          python3 - << 'PY'
-          import re
-          root_gradle = 'android/build.gradle'
-          with open(root_gradle, 'r') as f:
-              content = f.read()
-          
-          if 'kotlin-gradle-plugin' not in content:
-              match = re.search(r'dependencies\s*\{', content)
-              if match:
-                  insert_pos = match.end()
-                  dep = '\n        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21"\n'
-                  content = content[:insert_pos] + dep + content[insert_pos:]
-                  with open(root_gradle, 'w') as f:
-                      f.write(content)
-                  print("Injected Kotlin 2.0.21 Gradle Plugin into root build.gradle.")
-          PY
-
-      # ── 5. Patch App Gradle for NDK, CMake, and Dependencies ──
-      - name: Patch app Gradle build files
-        run: |
-          python3 - << 'PY'
-          import re, sys
-
-          file_path = 'android/app/build.gradle'
-          with open(file_path, 'r') as f:
-              content = f.read()
-
-          if 'kotlin-android' not in content:
-              content = content.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'")
-
-          if 'ndkVersion' not in content:
-              match = re.search(r'android\s*\{', content)
-              if match:
-                  insert_pos = match.end()
-                  config = '\n    ndkVersion "25.1.8937393"\n    externalNativeBuild {\n        cmake {\n            path "src/main/cpp/CMakeLists.txt"\n            version "3.22.1"\n        }\n    }\n'
-                  content = content[:insert_pos] + config + content[insert_pos:]
-
-          if 'kotlin-bom' not in content:
-              match = re.search(r'dependencies\s*\{', content)
-              if match:
-                  insert_pos = match.end()
-                  # Using Kotlin 2.0.21 and coroutines 1.8.1 to match Capacitor 7
-                  deps = '\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
-                  content = content[:insert_pos] + deps + content[insert_pos:]
-
-          with open(file_path, 'w') as f:
-              f.write(content)
-          print("Successfully patched app/build.gradle with Kotlin 2.0.21 compatible dependencies")
-          PY
-
-      # ── 6. Compile with Smart Error Filter ──
-      - name: Build debug APK
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --info > gradle-build.log 2>&1 || { 
-            echo "==============================================="
-            echo "❌ BUILD FAILED - KOTLIN ERRORS ONLY:"
-            echo "==============================================="
-            grep "e: file://" gradle-build.log || echo "No standard Kotlin errors found. Showing last 30 lines:"
-            tail -n 30 gradle-build.log
-            echo "==============================================="
-            exit 1
-          }
-
-      - name: Upload APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: MacroExecutor-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: Upload Gradle Log on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-build-log
-          path: android/gradle-build.log
-          retention-days: 3
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MacroExecutor-Debug-APK
+        path: android/app/build/outputs/apk/debug/app-debug.apk 
