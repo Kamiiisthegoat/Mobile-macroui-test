@@ -1,1 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Capacitor-generated defaults (must stay) -->
+    <string name="app_name">MacroExecutor</string>
+    <string name="title_activity_main">MacroExecutor</string>
+    <string name="package_name">com.kamii.macroexecutor</string>
+    <string name="custom_url_scheme">com.kamii.macroexecutor</string>
 
+    <!-- MacroExecutor custom strings -->
+    <string name="accessibility_description">MacroExecutor uses the Accessibility Service to replay recorded taps and swipes at sub-millisecond latency.</string>
+    <string name="accessibility_service_description">MacroExecutor uses the Accessibility Service to replay recorded taps and swipes at sub-millisecond latency.</string>
+</resources>
