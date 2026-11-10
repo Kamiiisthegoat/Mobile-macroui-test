@@ -3,7 +3,6 @@ package com.kamii.macroexecutor
 import java.nio.ByteBuffer
 
 object NativePixelEngine {
-
     init {
         System.loadLibrary("macroengine")
     }
@@ -37,5 +36,5 @@ object NativePixelEngine {
         endY: Int,
         targetColor: Int,
         tolerance: Int
-    ): Int
+    ): Long
 }
