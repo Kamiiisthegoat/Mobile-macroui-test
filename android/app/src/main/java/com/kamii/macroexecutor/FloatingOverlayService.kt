@@ -5,7 +5,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
@@ -54,7 +56,7 @@ class FloatingOverlayService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, // Let touches pass through outside the button
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
@@ -71,16 +73,50 @@ class FloatingOverlayService : Service() {
             setBackgroundColor(Color.RED) // Red = Stopped
         }
 
+        // Reset the UI safely on the Main thread
+        val resetUiToStopped = {
+            Handler(Looper.getMainLooper()).post {
+                isRunning = false
+                statusDot.setBackgroundColor(Color.RED)
+                // Find the button inside container and change text
+                val btn = (container.getChildAt(1) as? Button)
+                btn?.text = "PLAY"
+            }
+        }
+
         val playStopBtn = Button(this).apply {
             text = "PLAY"
             setOnClickListener {
                 isRunning = !isRunning
                 text = if (isRunning) "STOP" else "PLAY"
                 statusDot.setBackgroundColor(if (isRunning) Color.GREEN else Color.RED)
-                
+
                 if (isRunning) {
-                    // The React UI handles script execution. If you want to run a default script:
-                    // QuickJsMacroRunner.execute(this@FloatingOverlayService, "log('Started from overlay');")
+                    // Fetch the last script from the React UI, or run a fallback test
+                    val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: """
+                        log("Overlay started: No script loaded, doing test tap.");
+                        await sleep(500);
+                        host.tap(540, 960);
+                    """.trimIndent()
+
+                    QuickJsMacroRunner.execute(this@FloatingOverlayService, scriptToRun, object : QuickJsMacroRunner.Listener {
+                        override fun onStarted() {
+                            android.util.Log.d("Overlay", "Macro started from Overlay")
+                        }
+                        override fun onLog(message: String) {
+                            android.util.Log.d("Overlay", message)
+                        }
+                        override fun onCompleted() {
+                            resetUiToStopped()
+                        }
+                        override fun onStopped() {
+                            resetUiToStopped()
+                        }
+                        override fun onError(message: String, stack: String?) {
+                            android.util.Log.e("Overlay", "Error: $message")
+                            resetUiToStopped()
+                        }
+                    })
                 } else {
                     QuickJsMacroRunner.stop()
                 }
