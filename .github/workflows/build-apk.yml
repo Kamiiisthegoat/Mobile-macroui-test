@@ -80,26 +80,28 @@ jobs:
           EOF
           fi
 
-      # ── 1. Patch Root Gradle & Memory Settings ──
-      - name: Patch root Gradle and memory settings
+      # ── 1. Patch Gradle Memory Settings ──
+      - name: Configure Gradle Memory Limits
+        run: |
+          # Write explicitly sized memory limits to prevent OOM crashes
+          cat > android/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          kotlin.daemon.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
+          echo "Configured Gradle and Kotlin daemon memory limits."
+
+      # ── 2. Patch Root Gradle for Kotlin Plugin ──
+      - name: Patch root Gradle file
         run: |
           python3 - << 'PY'
-          import re, os
-
-          # 1. Increase Gradle Daemon Memory
-          prop_path = 'android/gradle.properties'
-          os.makedirs(os.path.dirname(prop_path), exist_ok=True)
-          with open(prop_path, 'a') as f:
-              f.write('\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n')
-          print("Added Gradle JVM args for memory.")
-
-          # 2. Add Kotlin Plugin classpath to root build.gradle
+          import re
           root_gradle = 'android/build.gradle'
           with open(root_gradle, 'r') as f:
               content = f.read()
           
           if 'kotlin-gradle-plugin' not in content:
-              # Standard Capacitor 7 build.gradle uses buildscript dependencies
               match = re.search(r'dependencies\s*\{', content)
               if match:
                   insert_pos = match.end()
@@ -110,7 +112,7 @@ jobs:
                   print("Injected Kotlin Gradle Plugin into root build.gradle.")
           PY
 
-      # ── 2. Patch App Gradle ──
+      # ── 3. Patch App Gradle for NDK, CMake, and Dependencies ──
       - name: Patch app Gradle build files
         run: |
           python3 - << 'PY'
@@ -120,44 +122,36 @@ jobs:
           with open(file_path, 'r') as f:
               content = f.read()
 
-          # Apply Kotlin plugin
           if 'kotlin-android' not in content:
               content = content.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'")
-              print("Applied kotlin-android plugin.")
 
-          # Inject NDK and CMake
           if 'ndkVersion' not in content:
               match = re.search(r'android\s*\{', content)
               if match:
                   insert_pos = match.end()
                   config = '\n    ndkVersion "25.1.8937393"\n    externalNativeBuild {\n        cmake {\n            path "src/main/cpp/CMakeLists.txt"\n            version "3.22.1"\n        }\n    }\n'
                   content = content[:insert_pos] + config + content[insert_pos:]
-                  print("Injected NDK and CMake configuration.")
 
-          # Inject dependencies and resolutionStrategy
           if 'kotlin-bom' not in content:
               match = re.search(r'dependencies\s*\{', content)
               if match:
                   insert_pos = match.end()
                   deps = '\n    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")\n    implementation "org.jetbrains.kotlin:kotlin-stdlib"\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
                   content = content[:insert_pos] + deps + content[insert_pos:]
-                  print("Injected dependencies.")
 
-          # Force Kotlin stdlib alignment
           if 'resolutionStrategy' not in content:
               match = re.search(r'dependencies\s*\{', content)
               if match:
                   insert_pos = match.end()
                   strategy = '\n    configurations.all {\n        resolutionStrategy {\n            force "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"\n            force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.22"\n        }\n    }\n'
                   content = content[:insert_pos] + strategy + content[insert_pos:]
-                  print("Injected Kotlin stdlib resolutionStrategy.")
 
           with open(file_path, 'w') as f:
               f.write(content)
           print("Successfully patched app/build.gradle")
           PY
 
-      # ── 3. Compile with Log Capture ──
+      # ── 4. Compile with Log Capture ──
       - name: Build debug APK
         working-directory: android
         run: |
