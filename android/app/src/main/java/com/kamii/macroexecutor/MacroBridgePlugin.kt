@@ -18,8 +18,6 @@ import com.getcapacitor.annotation.CapacitorPlugin
 @CapacitorPlugin(name = "MacroBridge")
 class MacroBridgePlugin : Plugin() {
 
-    // ── Permission status ────────────────────────────────────
-
     private fun canDrawOverlays(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
 
@@ -28,27 +26,26 @@ class MacroBridgePlugin : Plugin() {
 
     @PluginMethod
     fun isReady(call: PluginCall) {
-        val acc  = accessibilityReady()
-        val ovl  = canDrawOverlays()
-        val cap  = ScreenCaptureHolder.isReady
-        call.resolve(JSObject().apply {
-            put("accessibility", acc)
-            put("overlay", ovl)
-            put("screenCapture", cap)
-            put("ready", acc && ovl && cap)
-        })
+        val acc = accessibilityReady()
+        val ovl = canDrawOverlays()
+        val cap = ScreenCaptureHolder.isReady
+        call.resolve(
+            JSObject().apply {
+                put("accessibility", acc)
+                put("overlay", ovl)
+                put("screenCapture", cap)
+                put("ready", acc && ovl && cap)
+            }
+        )
     }
 
-    /** Alias — keeps older UI code working. */
     @PluginMethod
     fun checkPermissionsStatus(call: PluginCall) = isReady(call)
-
-    // ── One-shot permission wizard ──────────────────────────
 
     @PluginMethod
     fun requestAllPermissions(call: PluginCall) {
         if (!accessibilityReady()) openAccessibilitySettingsInternal()
-        if (!canDrawOverlays())     openOverlaySettingsInternal()
+        if (!canDrawOverlays()) openOverlaySettingsInternal()
         isReady(call)
     }
 
@@ -64,7 +61,7 @@ class MacroBridgePlugin : Plugin() {
                 Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-        } catch (_: Exception) { /* OEM ROM may hide this screen */ }
+        } catch (_: Exception) { /* OEM may hide this screen */ }
     }
 
     @PluginMethod
@@ -90,11 +87,9 @@ class MacroBridgePlugin : Plugin() {
                         Uri.parse("package:${context.packageName}")
                     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
-            } catch (_: Exception) {}
+            } catch (_: Exception) { /* give up silently */ }
         }
     }
-
-    // ── Screen capture ──────────────────────────────────────
 
     @PluginMethod
     fun requestScreenCapture(call: PluginCall) {
@@ -126,8 +121,6 @@ class MacroBridgePlugin : Plugin() {
         }
     }
 
-    // ── Overlay control ─────────────────────────────────────
-
     @PluginMethod
     fun startOverlay(call: PluginCall) {
         if (!canDrawOverlays()) {
@@ -149,8 +142,6 @@ class MacroBridgePlugin : Plugin() {
         call.resolve(JSObject().put("running", false))
     }
 
-    // ── Macro execution ─────────────────────────────────────
-
     @PluginMethod
     fun executeQuickJs(call: PluginCall) {
         val script = call.getString("script") ?: run {
@@ -165,12 +156,10 @@ class MacroBridgePlugin : Plugin() {
             call.reject("Screen capture not ready")
             return
         }
-        // WebView runner switches to Main internally; safe to call from any thread.
         QuickJsMacroRunner.execute(context, script)
         call.resolve(JSObject().put("started", true))
     }
 
-    /** Alias — keeps older UI code working. */
     @PluginMethod
     fun executeScript(call: PluginCall) = executeQuickJs(call)
 
@@ -180,16 +169,13 @@ class MacroBridgePlugin : Plugin() {
         call.resolve()
     }
 
-    /** Alias — keeps older UI code working. */
     @PluginMethod
     fun stopScript(call: PluginCall) = stopMacro(call)
 
-    // ── Debug helpers ───────────────────────────────────────
-
     @PluginMethod
     fun testTap(call: PluginCall) {
-        val x = (call.getFloat("x") ?: 540f).toInt()
-        val y = (call.getFloat("y") ?: 960f).toInt()
+        val x = call.getFloat("x") ?: 540f
+        val y = call.getFloat("y") ?: 960f
         val svc = MacroAccessibilityService.instance ?: run {
             call.reject("Accessibility service not connected")
             return
