@@ -174,7 +174,6 @@ jobs:
                           val image = reader.acquireLatestImage() ?: return@registerJavaMethod false
                           try {
                               val plane = image.planes[0]
-                              // Use getArray to correctly extract JSArray from arguments
                               val jsArray = args.getArray(0) ?: return@registerJavaMethod false
                               val len = jsArray.length()
                               val triplets = IntArray(len) { i ->
@@ -232,16 +231,16 @@ jobs:
           EOF
           echo "Patched QuickJsMacroRunner.kt with corrected API."
 
-      # ── 2. Patch Gradle Memory Settings ──
+      # ── 2. Patch Gradle Memory Settings (OOM FIX) ──
       - name: Configure Gradle Memory Limits
         run: |
           cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
-          kotlin.daemon.jvmargs=-Xmx2g
+          org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+UseG1GC
+          kotlin.compiler.execution.strategy=in-process
           android.useAndroidX=true
           android.enableJetifier=true
           EOF
-          echo "Configured Gradle and Kotlin daemon memory limits."
+          echo "Configured Gradle to run Kotlin compiler in-process with 6GB heap."
 
       # ── 3. Patch Root Gradle for Kotlin Plugin ──
       - name: Patch root Gradle file
