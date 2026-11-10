@@ -157,11 +157,15 @@ object QuickJsMacroRunner {
         val wasRunning = running.getAndSet(false)
         if (!wasRunning) return
         if (!silent) mainHandler.post { listener?.onStopped() }
+        
         mainHandler.post {
             webView?.evaluateJavascript("try{__cancel()}catch(e){}", null)
             val wv = webView
             webView = null
-            mainHandler.postDelayed({ runCatching { wv?.destroy() }; listener = null }, 400L)
+            mainHandler.postDelayed({
+                runCatching { wv?.destroy() }
+                // Don't null the listener, just let it be overwritten on the next execute()
+            }, 400L)
         }
     }
 
@@ -178,7 +182,6 @@ object QuickJsMacroRunner {
         }
         @JavascriptInterface fun getPixel(x: Int, y: Int): Int = ScreenCaptureHolder.getPixel(x, y)
         
-        // 🔥 OVERLAY CONTROLS
         @JavascriptInterface fun overlayHide() { FloatingOverlayService.instance?.setOverlayVisibility(false) }
         @JavascriptInterface fun overlayShow() { FloatingOverlayService.instance?.setOverlayVisibility(true) }
         @JavascriptInterface fun overlayText(text: String) { FloatingOverlayService.instance?.setOverlayText(text) }
