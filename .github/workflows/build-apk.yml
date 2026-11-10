@@ -80,36 +80,52 @@ jobs:
           EOF
           fi
 
-      # ── Explicit Version Pinning & Gradle Patching ──
-      - name: Patch Gradle for version compatibility
+      # ── 1. Patch Root Gradle & Memory Settings ──
+      - name: Patch root Gradle and memory settings
         run: |
           python3 - << 'PY'
-          import re, sys, os
+          import re, os
 
-          # 1. Ensure Gradle wrapper version is compatible with AGP 8.7.2
-          wrapper_path = 'android/gradle/wrapper/gradle-wrapper.properties'
-          if os.path.exists(wrapper_path):
-              with open(wrapper_path, 'r') as f:
-                  content = f.read()
-              # Capacitor 7 defaults to Gradle 8.11.1, which is compatible.
-              # This is a safeguard in case an older version is present.
-              if 'gradle-8.' not in content:
-                  content = re.sub(r'gradle-.*-all\.zip', 'gradle-8.11.1-all.zip', content)
-                  with open(wrapper_path, 'w') as f:
+          # 1. Increase Gradle Daemon Memory
+          prop_path = 'android/gradle.properties'
+          os.makedirs(os.path.dirname(prop_path), exist_ok=True)
+          with open(prop_path, 'a') as f:
+              f.write('\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n')
+          print("Added Gradle JVM args for memory.")
+
+          # 2. Add Kotlin Plugin classpath to root build.gradle
+          root_gradle = 'android/build.gradle'
+          with open(root_gradle, 'r') as f:
+              content = f.read()
+          
+          if 'kotlin-gradle-plugin' not in content:
+              # Standard Capacitor 7 build.gradle uses buildscript dependencies
+              match = re.search(r'dependencies\s*\{', content)
+              if match:
+                  insert_pos = match.end()
+                  dep = '\n        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"\n'
+                  content = content[:insert_pos] + dep + content[insert_pos:]
+                  with open(root_gradle, 'w') as f:
                       f.write(content)
-                  print("Gradle wrapper updated to 8.11.1")
+                  print("Injected Kotlin Gradle Plugin into root build.gradle.")
+          PY
 
-          # 2. Patch app/build.gradle
+      # ── 2. Patch App Gradle ──
+      - name: Patch app Gradle build files
+        run: |
+          python3 - << 'PY'
+          import re, sys
+
           file_path = 'android/app/build.gradle'
           with open(file_path, 'r') as f:
               content = f.read()
 
-          # Apply Kotlin plugin with a specific version (2.0.21 is compatible with AGP 8.7.x)
+          # Apply Kotlin plugin
           if 'kotlin-android' not in content:
               content = content.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'")
               print("Applied kotlin-android plugin.")
 
-          # Inject NDK and CMake into the android { ... } block
+          # Inject NDK and CMake
           if 'ndkVersion' not in content:
               match = re.search(r'android\s*\{', content)
               if match:
@@ -117,9 +133,6 @@ jobs:
                   config = '\n    ndkVersion "25.1.8937393"\n    externalNativeBuild {\n        cmake {\n            path "src/main/cpp/CMakeLists.txt"\n            version "3.22.1"\n        }\n    }\n'
                   content = content[:insert_pos] + config + content[insert_pos:]
                   print("Injected NDK and CMake configuration.")
-              else:
-                  print("ERROR: Could not find 'android {' block.")
-                  sys.exit(1)
 
           # Inject dependencies and resolutionStrategy
           if 'kotlin-bom' not in content:
@@ -129,11 +142,8 @@ jobs:
                   deps = '\n    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")\n    implementation "org.jetbrains.kotlin:kotlin-stdlib"\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
                   content = content[:insert_pos] + deps + content[insert_pos:]
                   print("Injected dependencies.")
-              else:
-                  print("ERROR: Could not find 'dependencies {' block.")
-                  sys.exit(1)
 
-          # Force Kotlin stdlib alignment to prevent conflicts[reference:4]
+          # Force Kotlin stdlib alignment
           if 'resolutionStrategy' not in content:
               match = re.search(r'dependencies\s*\{', content)
               if match:
