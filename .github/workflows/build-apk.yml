@@ -83,49 +83,67 @@ jobs:
           EOF
           fi
 
-      # ── 2. Safely Patch Gradle files with Python ──
+      # ── 2. Robust Python Patching ──
       - name: Patch Gradle build files
         run: |
           python3 - << 'PY'
-          import re
+          import re, sys
 
           file_path = 'android/app/build.gradle'
-          with open(file_path, 'r') as f:
-              content = f.read()
+          try:
+              with open(file_path, 'r') as f:
+                  content = f.read()
+          except Exception as e:
+              print(f"Error reading {file_path}: {e}")
+              sys.exit(1)
 
           # 1. Apply Kotlin plugin
           if 'kotlin-android' not in content:
               content = content.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'")
+              print("Applied kotlin-android plugin.")
 
           # 2. Inject NDK and CMake into the android { ... } block
           if 'ndkVersion' not in content:
-              android_block = re.search(r'android\s*\{', content)
-              if android_block:
-                  insert_pos = android_block.end()
+              # Find the android block, handling optional whitespace
+              match = re.search(r'android\s*\{', content)
+              if match:
+                  insert_pos = match.end()
                   config = '\n    ndkVersion "25.1.8937393"\n    externalNativeBuild {\n        cmake {\n            path "src/main/cpp/CMakeLists.txt"\n            version "3.22.1"\n        }\n    }\n'
                   content = content[:insert_pos] + config + content[insert_pos:]
+                  print("Injected NDK and CMake configuration.")
+              else:
+                  print("ERROR: Could not find 'android {' block.")
+                  sys.exit(1)
+          else:
+              print("NDK configuration already present.")
 
           # 3. Inject dependencies into the dependencies { ... } block
           if 'kotlin-bom' not in content:
-              deps_block = re.search(r'dependencies\s*\{', content)
-              if deps_block:
-                  insert_pos = deps_block.end()
+              match = re.search(r'dependencies\s*\{', content)
+              if match:
+                  insert_pos = match.end()
                   deps = '\n    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")\n    implementation "org.jetbrains.kotlin:kotlin-stdlib"\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
                   content = content[:insert_pos] + deps + content[insert_pos:]
+                  print("Injected dependencies.")
+              else:
+                  print("ERROR: Could not find 'dependencies {' block.")
+                  sys.exit(1)
+          else:
+              print("Dependencies already present.")
 
           with open(file_path, 'w') as f:
               f.write(content)
           print("Successfully patched app/build.gradle")
           PY
 
-      # ── 3. Compile (with log capture) ──
+      # ── 3. Compile with Log Capture ──
       - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace --info > gradle-build.log 2>&1 || { 
             echo "❌ BUILD FAILED"; 
-            tail -n 100 gradle-build.log; 
+            tail -n 200 gradle-build.log; 
             exit 1; 
           }
 
@@ -139,7 +157,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # ── 5. Upload Log if failed (so you can see the exact error) ──
+      # ── 5. Upload Log if failed ──
       - name: Upload Gradle Log on Failure
         if: failure()
         uses: actions/upload-artifact@v4
