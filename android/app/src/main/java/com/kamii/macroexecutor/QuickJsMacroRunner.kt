@@ -11,6 +11,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object QuickJsMacroRunner {
 
+    // 🔥 ADDED: So the Floating Overlay can access the last script you ran
+    var lastExecutedScript: String? = null
+
     interface Listener {
         fun onStarted()
         fun onLog(message: String)
@@ -86,6 +89,9 @@ object QuickJsMacroRunner {
 
     @SuppressLint("SetJavaScriptEnabled")
     fun execute(context: Context, script: String, listener: Listener) {
+        // 🔥 ADDED: Save the script so the Floating Overlay can run it later
+        lastExecutedScript = script
+
         stop(silent = true)
         this.listener = listener
         running.set(true)
