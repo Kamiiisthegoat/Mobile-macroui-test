@@ -14,34 +14,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 1. Setup Node.js 22 (resolves deprecation warning) ──
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      # ── 2. Setup Java 21 (resolves deprecation warning) ──
       - name: Setup Java 21
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      # ── 3. Setup Android SDK (v4 fixes removed tools package) ──
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # ── 4. Install dependencies (legacy-peer-deps required) ──
+      # ── 1. Explicitly install NDK & CMake ──
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager --install "ndk;25.1.8937393" "cmake;3.22.1"
+
       - name: Install npm dependencies
         run: |
           npm install --legacy-peer-deps
           npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
 
-      # ── 5. Build Vite frontend ──────────────────────────────
       - name: Build Vite web app
         run: npm run build
 
-      # ── 6. Back up custom android/app/src/main ─────────────
       - name: Backup custom native sources
         run: |
           if [ -d android/app/src/main ]; then
@@ -52,15 +51,12 @@ jobs:
             echo "No pre-existing android/app/src/main found, nothing to backup."
           fi
 
-      # ── 7. Remove placeholder android/ so cap add generates fresh ──
       - name: Remove placeholder android directory
         run: rm -rf android
 
-      # ── 8. Generate a valid Capacitor Android project ──────
       - name: Add Capacitor Android platform
         run: npx cap add android
 
-      # ── 9. Restore custom files (overwrite Capacitor defaults) ──
       - name: Restore custom native sources
         run: |
           if [ -d /tmp/custom-main ]; then
@@ -68,7 +64,6 @@ jobs:
             echo "Custom native sources restored."
           fi
 
-      # ── 10. Ensure strings.xml contains accessibility_description ──
       - name: Ensure strings.xml has accessibility_description
         run: |
           STRINGS=android/app/src/main/res/values/strings.xml
@@ -88,55 +83,67 @@ jobs:
           EOF
           fi
 
-      # ── 11. Inject Gradle init script (Kotlin BOM / NDK / QuickJS) ──
-      - name: Write Gradle init script
+      # ── 2. Safely Patch Gradle files with Python ──
+      - name: Patch Gradle build files
         run: |
-          mkdir -p /tmp/gradle-init
-          cat > /tmp/gradle-init/inject.gradle << 'GRADLE_EOF'
-          allprojects {
-              afterEvaluate { project ->
-                  if (project.name == 'app' && project.plugins.hasPlugin('com.android.application')) {
-                      // Kotlin Android plugin
-                      if (!project.plugins.hasPlugin('org.jetbrains.kotlin.android')) {
-                          project.apply plugin: 'org.jetbrains.kotlin.android'
-                      }
+          python3 - << 'PY'
+          import re
 
-                      // NDK + CMake
-                      project.android.ndkVersion = "25.1.8937393"
-                      project.android.externalNativeBuild {
-                          cmake {
-                              path = project.file("src/main/cpp/CMakeLists.txt")
-                              version = "3.22.1"
-                          }
-                      }
+          file_path = 'android/app/build.gradle'
+          with open(file_path, 'r') as f:
+              content = f.read()
 
-                      // Kotlin BOM: prevents kotlin-stdlib vs kotlin-stdlib-jdk8 duplicate classes
-                      project.dependencies {
-                          implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")
-                          implementation "org.jetbrains.kotlin:kotlin-stdlib"
-                          implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
-                          implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"
-                      }
-                  }
-              }
-          }
-          GRADLE_EOF
+          # 1. Apply Kotlin plugin
+          if 'kotlin-android' not in content:
+              content = content.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'")
 
-      # ── 12. Compile Debug APK ────────────────────────────────
+          # 2. Inject NDK and CMake into the android { ... } block
+          if 'ndkVersion' not in content:
+              android_block = re.search(r'android\s*\{', content)
+              if android_block:
+                  insert_pos = android_block.end()
+                  config = '\n    ndkVersion "25.1.8937393"\n    externalNativeBuild {\n        cmake {\n            path "src/main/cpp/CMakeLists.txt"\n            version "3.22.1"\n        }\n    }\n'
+                  content = content[:insert_pos] + config + content[insert_pos:]
+
+          # 3. Inject dependencies into the dependencies { ... } block
+          if 'kotlin-bom' not in content:
+              deps_block = re.search(r'dependencies\s*\{', content)
+              if deps_block:
+                  insert_pos = deps_block.end()
+                  deps = '\n    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")\n    implementation "org.jetbrains.kotlin:kotlin-stdlib"\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
+                  content = content[:insert_pos] + deps + content[insert_pos:]
+
+          with open(file_path, 'w') as f:
+              f.write(content)
+          print("Successfully patched app/build.gradle")
+          PY
+
+      # ── 3. Compile (with log capture) ──
       - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug \
-            --init-script /tmp/gradle-init/inject.gradle \
-            --stacktrace \
-            --no-daemon
+          ./gradlew assembleDebug --stacktrace --info > gradle-build.log 2>&1 || { 
+            echo "❌ BUILD FAILED"; 
+            tail -n 100 gradle-build.log; 
+            exit 1; 
+          }
 
-      # ── 13. Upload APK artifact ─────────────────────────────
+      # ── 4. Upload APK if successful ──
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: MacroExecutor-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
           if-no-files-found: error
+
+      # ── 5. Upload Log if failed (so you can see the exact error) ──
+      - name: Upload Gradle Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: android/gradle-build.log
+          retention-days: 3
