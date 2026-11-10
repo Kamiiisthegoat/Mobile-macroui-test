@@ -9,25 +9,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Runs user JavaScript on the system WebView (V8 engine).
- *
- * Public API is exposed to JS as `host.*`:
- *   host.tap(x, y)
- *   host.longPress(x, y, ms)
- *   host.swipe(x1, y1, x2, y2, ms)
- *   host.getPixel(x, y)               → packed ARGB Int
- *   host.matchPixels(csv, tolerance)  → true/false
- *   host.findColor(x1, y1, x2, y2, "#RRGGBB", tolerance) → "x,y" | "-1,-1"
- *   host.log(msg)
- *
- * JS-side prelude also provides:
- *   await sleep(ms)                   ← cancellable, non-blocking
- *   await waitFor(fn, timeoutMs, pollMs)
- *   log(msg)                          ← also bridged to listener
- *   setStatus(msg)
- *   colorAt(x, y)                     ← "RRGGBB" hex string
- */
 object QuickJsMacroRunner {
 
     interface Listener {
@@ -43,8 +24,8 @@ object QuickJsMacroRunner {
     private var webView: WebView? = null
     private val running = AtomicBoolean(false)
 
-    // ---- JS prelude: sleep, waitFor, console bridge, cancellation flag ----
-    private const val BOOTSTRAP = """
+    // NOT `const val` — .trimIndent() is a function call, not a compile-time constant.
+    private val BOOTSTRAP = """
         (function() {
             let __cancelled = false;
             let __cancelReject = null;
@@ -172,7 +153,8 @@ object QuickJsMacroRunner {
         }
     }
 
-    inner class HostBridge {
+    // NOT `inner` — object is a singleton, `inner` is illegal here.
+    class HostBridge {
 
         @JavascriptInterface
         fun tap(x: Int, y: Int) {
