@@ -28,7 +28,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      # ── 1. Explicitly install NDK & CMake ──
       - name: Install NDK and CMake
         run: |
           sdkmanager --install "ndk;25.1.8937393" "cmake;3.22.1"
@@ -47,8 +46,6 @@ jobs:
             mkdir -p /tmp/custom-main
             cp -R android/app/src/main/. /tmp/custom-main/
             echo "Backed up custom main sources."
-          else
-            echo "No pre-existing android/app/src/main found, nothing to backup."
           fi
 
       - name: Remove placeholder android directory
@@ -83,28 +80,37 @@ jobs:
           EOF
           fi
 
-      # ── 2. Robust Python Patching ──
-      - name: Patch Gradle build files
+      # ── Explicit Version Pinning & Gradle Patching ──
+      - name: Patch Gradle for version compatibility
         run: |
           python3 - << 'PY'
-          import re, sys
+          import re, sys, os
 
-          file_path = 'android/app/build.gradle'
-          try:
-              with open(file_path, 'r') as f:
+          # 1. Ensure Gradle wrapper version is compatible with AGP 8.7.2
+          wrapper_path = 'android/gradle/wrapper/gradle-wrapper.properties'
+          if os.path.exists(wrapper_path):
+              with open(wrapper_path, 'r') as f:
                   content = f.read()
-          except Exception as e:
-              print(f"Error reading {file_path}: {e}")
-              sys.exit(1)
+              # Capacitor 7 defaults to Gradle 8.11.1, which is compatible.
+              # This is a safeguard in case an older version is present.
+              if 'gradle-8.' not in content:
+                  content = re.sub(r'gradle-.*-all\.zip', 'gradle-8.11.1-all.zip', content)
+                  with open(wrapper_path, 'w') as f:
+                      f.write(content)
+                  print("Gradle wrapper updated to 8.11.1")
 
-          # 1. Apply Kotlin plugin
+          # 2. Patch app/build.gradle
+          file_path = 'android/app/build.gradle'
+          with open(file_path, 'r') as f:
+              content = f.read()
+
+          # Apply Kotlin plugin with a specific version (2.0.21 is compatible with AGP 8.7.x)
           if 'kotlin-android' not in content:
               content = content.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'")
               print("Applied kotlin-android plugin.")
 
-          # 2. Inject NDK and CMake into the android { ... } block
+          # Inject NDK and CMake into the android { ... } block
           if 'ndkVersion' not in content:
-              # Find the android block, handling optional whitespace
               match = re.search(r'android\s*\{', content)
               if match:
                   insert_pos = match.end()
@@ -114,10 +120,8 @@ jobs:
               else:
                   print("ERROR: Could not find 'android {' block.")
                   sys.exit(1)
-          else:
-              print("NDK configuration already present.")
 
-          # 3. Inject dependencies into the dependencies { ... } block
+          # Inject dependencies and resolutionStrategy
           if 'kotlin-bom' not in content:
               match = re.search(r'dependencies\s*\{', content)
               if match:
@@ -128,8 +132,15 @@ jobs:
               else:
                   print("ERROR: Could not find 'dependencies {' block.")
                   sys.exit(1)
-          else:
-              print("Dependencies already present.")
+
+          # Force Kotlin stdlib alignment to prevent conflicts[reference:4]
+          if 'resolutionStrategy' not in content:
+              match = re.search(r'dependencies\s*\{', content)
+              if match:
+                  insert_pos = match.end()
+                  strategy = '\n    configurations.all {\n        resolutionStrategy {\n            force "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"\n            force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.22"\n        }\n    }\n'
+                  content = content[:insert_pos] + strategy + content[insert_pos:]
+                  print("Injected Kotlin stdlib resolutionStrategy.")
 
           with open(file_path, 'w') as f:
               f.write(content)
@@ -147,7 +158,6 @@ jobs:
             exit 1; 
           }
 
-      # ── 4. Upload APK if successful ──
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
@@ -157,7 +167,6 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # ── 5. Upload Log if failed ──
       - name: Upload Gradle Log on Failure
         if: failure()
         uses: actions/upload-artifact@v4
