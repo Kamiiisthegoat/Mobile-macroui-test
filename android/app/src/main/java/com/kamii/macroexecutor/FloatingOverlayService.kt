@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -17,6 +18,14 @@ class FloatingOverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: View
     private var isRunning = false
+    
+    // 0 = Toggle, 1 = Single Press, 2 = Arm/Fire
+    private var currentMode = 0
+    private var isArmed = false
+
+    private lateinit var statusDot: View
+    private lateinit var modeBtn: TextView
+    private lateinit var actionBtn: TextView
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,9 +62,7 @@ class FloatingOverlayService : Service() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else WindowManager.LayoutParams.TYPE_PHONE,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         )
@@ -65,68 +72,57 @@ class FloatingOverlayService : Service() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(0xCC222222.toInt())
-            setPadding(16, 8, 16, 8)
+            setPadding(24, 12, 24, 12)
+            gravity = Gravity.CENTER_VERTICAL
+            // Rounded corners
+            val shape = GradientDrawable()
+            shape.shape = GradientDrawable.RECTANGLE
+            shape.cornerRadius = 50f
+            shape.setColor(0xCC222222.toInt())
+            background = shape
         }
 
-        val statusDot = View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(24, 24).apply { marginEnd = 16 }
-            setBackgroundColor(Color.RED) // Red = Stopped
+        // Status Dot (Green = Running, Red = Stopped, Yellow = Armed)
+        val dotShape = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.RED) }
+        statusDot = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(24, 24).apply { marginEnd = 24 }
+            background = dotShape
         }
 
-        // Reset the UI safely on the Main thread
-        val resetUiToStopped = {
-            Handler(Looper.getMainLooper()).post {
-                isRunning = false
-                statusDot.setBackgroundColor(Color.RED)
-                // Find the button inside container and change text
-                val btn = (container.getChildAt(1) as? Button)
-                btn?.text = "PLAY"
-            }
-        }
-
-        val playStopBtn = Button(this).apply {
-            text = "PLAY"
+        // Mode Switcher (TGL / 1X / ARM)
+        modeBtn = TextView(this).apply {
+            text = "TGL"
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(32, 16, 32, 16)
+            val bg = GradientDrawable().apply { cornerRadius = 30f; setColor(0xFF444444.toInt()) }
+            background = bg
             setOnClickListener {
-                isRunning = !isRunning
-                text = if (isRunning) "STOP" else "PLAY"
-                statusDot.setBackgroundColor(if (isRunning) Color.GREEN else Color.RED)
-
-                if (isRunning) {
-                    // Fetch the last script from the React UI, or run a fallback test
-                    val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: """
-                        log("Overlay started: No script loaded, doing test tap.");
-                        await sleep(500);
-                        host.tap(540, 960);
-                    """.trimIndent()
-
-                    QuickJsMacroRunner.execute(this@FloatingOverlayService, scriptToRun, object : QuickJsMacroRunner.Listener {
-                        override fun onStarted() {
-                            android.util.Log.d("Overlay", "Macro started from Overlay")
-                        }
-                        override fun onLog(message: String) {
-                            android.util.Log.d("Overlay", message)
-                        }
-                        override fun onCompleted() {
-                            resetUiToStopped()
-                        }
-                        override fun onStopped() {
-                            resetUiToStopped()
-                        }
-                        override fun onError(message: String, stack: String?) {
-                            android.util.Log.e("Overlay", "Error: $message")
-                            resetUiToStopped()
-                        }
-                    })
-                } else {
-                    QuickJsMacroRunner.stop()
-                }
+                currentMode = (currentMode + 1) % 3
+                updateUI()
             }
         }
+
+        // Action Button
+        actionBtn = TextView(this).apply {
+            text = "PLAY"
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setPadding(48, 16, 48, 16)
+            val bg = GradientDrawable().apply { cornerRadius = 30f; setColor(0xFF4CAF50.toInt()) }
+            background = bg
+            setOnClickListener { handleActionClick() }
+        }
+
+        val spacer = View(this).apply { layoutParams = LinearLayout.LayoutParams(24, 1) }
 
         container.addView(statusDot)
-        container.addView(playStopBtn)
+        container.addView(modeBtn)
+        container.addView(spacer)
+        container.addView(actionBtn)
 
-        // Make the pill draggable
+        // Draggable logic
         container.setOnTouchListener(object : View.OnTouchListener {
             private var initialX = 0
             private var initialY = 0
@@ -136,10 +132,8 @@ class FloatingOverlayService : Service() {
             override fun onTouch(v: View?, event: MotionEvent): Boolean {
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        initialX = params.x
-                        initialY = params.y
-                        initialTouchX = event.rawX
-                        initialTouchY = event.rawY
+                        initialX = params.x; initialY = params.y
+                        initialTouchX = event.rawX; initialTouchY = event.rawY
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
@@ -155,12 +149,81 @@ class FloatingOverlayService : Service() {
 
         overlayView = container
         windowManager.addView(overlayView, params)
+        updateUI()
+    }
+
+    private fun handleActionClick() {
+        when (currentMode) {
+            0 -> { // Toggle Mode
+                if (!isRunning) startScript() else { isRunning = false; QuickJsMacroRunner.stop() }
+            }
+            1 -> { // Single Press Mode
+                if (!isRunning) startScript()
+            }
+            2 -> { // Arm / Fire Mode
+                if (!isArmed) {
+                    isArmed = true
+                    if (!isRunning) startScript()
+                    QuickJsMacroRunner.sendEvent("arm")
+                } else {
+                    isArmed = false
+                    QuickJsMacroRunner.sendEvent("fire")
+                }
+            }
+        }
+        updateUI()
+    }
+
+    private fun startScript() {
+        isRunning = true
+        val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: """
+            log("No script loaded. Defaulting to a 1-second wait and tap.");
+            await sleep(1000);
+            host.tap(540, 960);
+        """.trimIndent()
+
+        QuickJsMacroRunner.execute(this, scriptToRun, object : QuickJsMacroRunner.Listener {
+            override fun onStarted() {}
+            override fun onLog(message: String) {}
+            override fun onCompleted() { resetUi() }
+            override fun onStopped() { resetUi() }
+            override fun onError(message: String, stack: String?) { resetUi() }
+        })
+    }
+
+    private fun resetUi() {
+        Handler(Looper.getMainLooper()).post {
+            isRunning = false
+            isArmed = false
+            updateUI()
+        }
+    }
+
+    private fun updateUI() {
+        when (currentMode) {
+            0 -> { // Toggle
+                modeBtn.text = "TGL"
+                actionBtn.text = if (isRunning) "STOP" else "PLAY"
+                (actionBtn.background as? GradientDrawable)?.setColor(if (isRunning) Color.RED else Color.parseColor("#4CAF50"))
+                (statusDot.background as? GradientDrawable)?.setColor(if (isRunning) Color.GREEN else Color.RED)
+            }
+            1 -> { // Single Press
+                modeBtn.text = "1X"
+                actionBtn.text = "RUN"
+                (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#2196F3"))
+                (statusDot.background as? GradientDrawable)?.setColor(if (isRunning) Color.GREEN else Color.RED)
+            }
+            2 -> { // Arm / Fire
+                modeBtn.text = "ARM"
+                actionBtn.text = if (isArmed) "FIRE" else "ARM"
+                (actionBtn.background as? GradientDrawable)?.setColor(if (isArmed) Color.RED else Color.parseColor("#FF9800"))
+                (statusDot.background as? GradientDrawable)?.setColor(if (isArmed) Color.YELLOW else Color.RED)
+            }
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        if (::overlayView.isInitialized) {
-            windowManager.removeView(overlayView)
-        }
+        if (::overlayView.isInitialized) windowManager.removeView(overlayView)
     }
 }
