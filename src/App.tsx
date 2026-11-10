@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { registerPlugin } from '@capacitor/core';
+
 import { Header } from './components/Header';
 import { FooterBar } from './components/FooterBar';
 import { MacroEngineCard } from './components/MacroEngineCard';
@@ -35,7 +37,8 @@ import {
   SINGLE_ENGINE_TEMPLATES
 } from './data/defaultConfigs';
 
-import { executePipelineSimulator } from './engine/pipelineEngine';
+// Connect to the Native Android Kotlin Plugin
+const MacroBridge = registerPlugin<any>('MacroBridge');
 
 export default function App() {
   // Navigation & View States (home, templates, recorder, metrics)
@@ -103,13 +106,6 @@ export default function App() {
       level: 'INFO',
       message: 'Native AccessibilityService bound successfully. GestureDescription ready.',
       engine: 'ACCESSIBILITY'
-    },
-    {
-      id: 'init-3',
-      timestampOffset: 22.5,
-      level: 'SUCCESS',
-      message: 'Loaded JNI libraries: libmacro_ndk_engine.so, libluau_runtime.so, libquickjs.so',
-      engine: 'JNI_LOADER'
     }
   ]);
   const [totalElapsedMs, setTotalElapsedMs] = useState<number>(22.5);
@@ -128,15 +124,46 @@ export default function App() {
     setTotalElapsedMs((prev) => Math.round((prev + 12.5) * 10) / 10);
   };
 
+  // 🔥 NATIVE EVENT LISTENER: Catches logs and status changes from Kotlin
+  useEffect(() => {
+    const logListener = MacroBridge.addListener('scriptLog', (data: any) => {
+      handleAddLog('INFO', data.message, 'NATIVE');
+    });
+
+    const statusListener = MacroBridge.addListener('scriptStatus', (data: any) => {
+      if (data.state === 'completed' || data.state === 'stopped') {
+        setIsExecuting(false);
+        setEngineActive(false);
+        handleAddLog('SUCCESS', `Execution ${data.state.toUpperCase()}`, 'NATIVE');
+      }
+      if (data.state === 'error') {
+        setIsExecuting(false);
+        setEngineActive(false);
+        handleAddLog('ERROR', data.message, 'NATIVE');
+      }
+    });
+
+    return () => {
+      logListener.remove();
+      statusListener.remove();
+    };
+  }, [totalElapsedMs]); // Keep dependency to maintain accurate timestamps
+
   const handleClearLogs = () => {
     setLogs([]);
     setTotalElapsedMs(0);
   };
 
-  // Toggle Macro Engine
+  // Toggle Macro Engine (Also stops the script if turned off)
   const handleToggleEngine = () => {
     const nextState = !engineActive;
     setEngineActive(nextState);
+    
+    if (!nextState) {
+      MacroBridge.stopMacro().catch(console.error);
+      setIsExecuting(false);
+    }
+
     handleAddLog(
       nextState ? 'SUCCESS' : 'INFO',
       `Macro Engine switched to [${nextState ? 'ON' : 'OFF'}]. ${nextState ? 'Kernel touch listeners active.' : 'Standby mode.'}`,
@@ -144,43 +171,71 @@ export default function App() {
     );
   };
 
-  // Execute Pipeline
-  const handleExecutePipeline = () => {
+  // 🔥 EXECUTE PIPELINE: Converts steps to JSON and sends to Kotlin
+  const handleExecutePipeline = async () => {
     setIsExecuting(true);
     setEngineActive(true);
-    handleAddLog('INFO', `Starting execution of ${pipelineSteps.length}-block pipeline at ${speedSettings.executionSpeedMs}ms inter-macro speed...`, 'PIPELINE');
+    handleAddLog('INFO', `Starting native execution of ${pipelineSteps.length}-block pipeline...`, 'PIPELINE');
 
-    setTimeout(() => {
-      const execution = executePipelineSimulator(pipelineSteps, speedSettings, sharedState);
-      setLogs((prev) => [...prev, ...execution.logs]);
-      setSharedState(execution.finalState);
-      setTotalElapsedMs((prev) => prev + execution.totalElapsedMs);
+    try {
+      const nativeActions: any[] = [];
+      pipelineSteps.forEach(step => {
+        if (!step.enabled) return;
+        
+        // Log the step to the native terminal
+        nativeActions.push({ type: 'log', message: `Executing ${step.language.toUpperCase()} Block #${step.stepNumber}` });
+        
+        // Note: You can parse `step.code` here to extract specific X/Y coordinates
+        // For now, we will simulate a generic tap based on your shared state
+        nativeActions.push({ type: 'tap', x: sharedState.lastTapX, y: sharedState.soruReady ? 800 : 1200 }); 
+        nativeActions.push({ type: 'delay', ms: speedSettings.executionSpeedMs });
+      });
+
+      await MacroBridge.executePipeline({ actions: JSON.stringify(nativeActions) });
+    } catch (e: any) {
+      handleAddLog('ERROR', e.message, 'BRIDGE');
       setIsExecuting(false);
-    }, 400);
+      setEngineActive(false);
+    }
   };
 
-  // Execute Single Engine Script
-  const handleExecuteSingleEngine = () => {
+  // 🔥 EXECUTE SINGLE ENGINE: Sends the code editor text to the WebView Engine
+  const handleExecuteSingleEngine = async () => {
     setIsExecuting(true);
     setEngineActive(true);
-    handleAddLog('INFO', `Starting single engine execution [Target: ${selectedSingleEngine.toUpperCase()}] with ${speedSettings.executionSpeedMs}ms delay...`, selectedSingleEngine.toUpperCase());
+    handleAddLog('INFO', `Starting single engine execution [Target: ${selectedSingleEngine.toUpperCase()}]...`, selectedSingleEngine.toUpperCase());
 
-    setTimeout(() => {
-      handleAddLog('GESTURE', `Native tap injected at (200, 450) [25ms]`, selectedSingleEngine.toUpperCase());
-      handleAddLog('SUCCESS', `${selectedSingleEngine.toUpperCase()} routine completed without error.`, selectedSingleEngine.toUpperCase());
+    try {
+      // Sends the raw code from the editor to QuickJsMacroRunner.kt
+      await MacroBridge.executeQuickJs({ script: singleEngineCode });
+    } catch (e: any) {
+      handleAddLog('ERROR', e.message, selectedSingleEngine.toUpperCase());
       setIsExecuting(false);
-    }, 300);
+      setEngineActive(false);
+    }
   };
 
-  // Execute Pre-made Config
-  const handleExecuteConfig = (config: MacroConfig) => {
+  // 🔥 EXECUTE PRE-MADE CONFIG: Fires taps based on saved coordinates
+  const handleExecuteConfig = async (config: MacroConfig) => {
     setEngineActive(true);
+    setIsExecuting(true);
     handleAddLog('INFO', `Executing pre-made config: ${config.name}...`, 'PRE_MADE');
-    setTimeout(() => {
-      handleAddLog('GESTURE', `Soru tap dispatched to (${config.soruCoords.x}, ${config.soruCoords.y}) [Verified Color: ${config.soruColor}]`, 'SORU_NDK');
-      handleAddLog('GESTURE', `Portal secondary tap dispatched to (${config.portalCoords.x}, ${config.portalCoords.y}) [Color: ${config.portalColor}]`, 'PORTAL_NDK');
-      handleAddLog('SUCCESS', `${config.name} flash-step combo finished in 45ms.`, 'NDK');
-    }, 250);
+    
+    try {
+      const actions = [
+        { type: 'log', message: `Soru tap at (${config.soruCoords.x}, ${config.soruCoords.y})` },
+        { type: 'tap', x: config.soruCoords.x, y: config.soruCoords.y },
+        { type: 'delay', ms: speedSettings.executionSpeedMs },
+        { type: 'log', message: `Portal tap at (${config.portalCoords.x}, ${config.portalCoords.y})` },
+        { type: 'tap', x: config.portalCoords.x, y: config.portalCoords.y }
+      ];
+
+      await MacroBridge.executePipeline({ actions: JSON.stringify(actions) });
+    } catch (e: any) {
+      handleAddLog('ERROR', e.message, 'PRE_MADE');
+      setIsExecuting(false);
+      setEngineActive(false);
+    }
   };
 
   // Load Config into Single Engine Editor
@@ -216,11 +271,7 @@ export default function App() {
   };
 
   // Import Callbacks
-  const handleImportPipeline = (
-    steps: PipelineStep[],
-    newSpeed?: SpeedSettings,
-    newState?: SharedStateData
-  ) => {
+  const handleImportPipeline = (steps: PipelineStep[], newSpeed?: SpeedSettings, newState?: SharedStateData) => {
     setPipelineSteps(steps);
     if (newSpeed) setSpeedSettings(newSpeed);
     if (newState) setSharedState(newState);
@@ -290,9 +341,9 @@ export default function App() {
       handleAddLog('SUCCESS', `Bound ${targetBinding.targetType.toUpperCase()} coordinates (${coords.x}, ${coords.y}) to config.`, 'COORDS');
       setTargetBinding(null);
     } else {
-      const tapCommand = `tap(${coords.x}, ${coords.y});`;
+      const tapCommand = `host.tap(${coords.x}, ${coords.y});`;
       setSingleEngineCode((prev) => (prev ? `${prev}\n${tapCommand}` : tapCommand));
-      handleAddLog('SUCCESS', `Sampled coordinates (${coords.x}, ${coords.y}). Appended tap() to active script.`, 'COORDS');
+      handleAddLog('SUCCESS', `Sampled coordinates (${coords.x}, ${coords.y}). Appended host.tap() to active script.`, 'COORDS');
     }
   };
 
@@ -314,7 +365,7 @@ export default function App() {
       handleAddLog('SUCCESS', `Bound ${targetBinding.targetType.toUpperCase()} color verification (${hexColor}) at (${coords.x}, ${coords.y}).`, 'COLOR');
       setTargetBinding(null);
     } else {
-      const colorCheck = `if (getPixel(${coords.x}, ${coords.y}) === "${hexColor}") {\n    tap(${coords.x}, ${coords.y});\n}`;
+      const colorCheck = `if (host.getPixel(${coords.x}, ${coords.y}) === 0xFF${hexColor.replace('#', '')}) {\n    host.tap(${coords.x}, ${coords.y});\n}`;
       setSingleEngineCode((prev) => (prev ? `${prev}\n${colorCheck}` : colorCheck));
       handleAddLog('SUCCESS', `Sampled color ${hexColor} at (${coords.x}, ${coords.y}). Appended color condition.`, 'COLOR');
     }
@@ -578,4 +629,4 @@ export default function App() {
       />
     </div>
   );
-}
+    } 
