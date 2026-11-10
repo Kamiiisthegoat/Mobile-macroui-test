@@ -14,32 +14,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 1. Setup Node.js (cache removed to prevent lockfile error) ──
-      - name: Setup Node.js 20
+      # ── 1. Setup Node.js 22 (resolves deprecation warning) ──
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
+      # ── 2. Setup Java 21 (resolves deprecation warning) ──
       - name: Setup Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
 
+      # ── 3. Setup Android SDK (v4 fixes removed tools package) ──
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
-      # ── 2. Install dependencies (legacy-peer-deps required) ──
+      # ── 4. Install dependencies (legacy-peer-deps required) ──
       - name: Install npm dependencies
         run: |
           npm install --legacy-peer-deps
           npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
 
-      # ── 3. Build Vite frontend ──────────────────────────────
+      # ── 5. Build Vite frontend ──────────────────────────────
       - name: Build Vite web app
         run: npm run build
 
-      # ── 4. Back up custom android/app/src/main ─────────────
+      # ── 6. Back up custom android/app/src/main ─────────────
       - name: Backup custom native sources
         run: |
           if [ -d android/app/src/main ]; then
@@ -50,15 +52,15 @@ jobs:
             echo "No pre-existing android/app/src/main found, nothing to backup."
           fi
 
-      # ── 5. Remove placeholder android/ so cap add generates fresh ──
+      # ── 7. Remove placeholder android/ so cap add generates fresh ──
       - name: Remove placeholder android directory
         run: rm -rf android
 
-      # ── 6. Generate a valid Capacitor Android project ──────
+      # ── 8. Generate a valid Capacitor Android project ──────
       - name: Add Capacitor Android platform
         run: npx cap add android
 
-      # ── 7. Restore custom files (overwrite Capacitor defaults) ──
+      # ── 9. Restore custom files (overwrite Capacitor defaults) ──
       - name: Restore custom native sources
         run: |
           if [ -d /tmp/custom-main ]; then
@@ -66,7 +68,7 @@ jobs:
             echo "Custom native sources restored."
           fi
 
-      # ── 8. Ensure strings.xml contains accessibility_description ──
+      # ── 10. Ensure strings.xml contains accessibility_description ──
       - name: Ensure strings.xml has accessibility_description
         run: |
           STRINGS=android/app/src/main/res/values/strings.xml
@@ -86,7 +88,7 @@ jobs:
           EOF
           fi
 
-      # ── 9. Inject Gradle init script (Kotlin BOM / NDK / QuickJS) ──
+      # ── 11. Inject Gradle init script (Kotlin BOM / NDK / QuickJS) ──
       - name: Write Gradle init script
         run: |
           mkdir -p /tmp/gradle-init
@@ -120,7 +122,7 @@ jobs:
           }
           GRADLE_EOF
 
-      # ── 10. Compile Debug APK ────────────────────────────────
+      # ── 12. Compile Debug APK ────────────────────────────────
       - name: Build debug APK
         working-directory: android
         run: |
@@ -130,7 +132,7 @@ jobs:
             --stacktrace \
             --no-daemon
 
-      # ── 11. Upload APK artifact ─────────────────────────────
+      # ── 13. Upload APK artifact ─────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
