@@ -26,7 +26,6 @@ object QuickJsMacroRunner {
     private var webView: WebView? = null
     private val running = AtomicBoolean(false)
 
-    // 🔥 ADDED: window.onMacroEvent lets the Overlay talk to the JS script
     private val BOOTSTRAP = """
         (function() {
             let __cancelled = false;
@@ -66,8 +65,16 @@ object QuickJsMacroRunner {
                     return Math.abs(r1 - r2) <= threshold && Math.abs(g1 - g2) <= threshold && Math.abs(b1 - b2) <= threshold;
                 }
             };
-            
-            // --- EVENT SYSTEM ---
+
+            // --- 🔥 FLOATY OVERLAY API ---
+            window.overlay = {
+                hide: function() { host.overlayHide(); },
+                show: function() { host.overlayShow(); },
+                setText: function(text) { host.overlayText(String(text)); },
+                move: function(x, y) { host.overlayMove(x, y); },
+                setColor: function(hex) { host.overlayColor(hex); }
+            };
+
             window.__isArmed = false;
             window.__isFired = false;
             window.onMacroEvent = function(event) {
@@ -94,7 +101,6 @@ object QuickJsMacroRunner {
             window.setStatus = setStatus;
             window.__cancel = __cancel;
             
-            // Auto.js globals
             window.press = press; window.tap = tap; window.longPress = longPress;
             window.swipe = swipe; window.toast = toast; window.captureScreen = captureScreen;
             window.images = images; window.colors = colors;
@@ -123,7 +129,6 @@ object QuickJsMacroRunner {
         }
     }
 
-    // 🔥 ADDED: This lets the overlay send 'arm' and 'fire' to your JS code
     fun sendEvent(event: String) {
         mainHandler.post {
             webView?.evaluateJavascript("if(window.onMacroEvent) window.onMacroEvent('$event');", null)
@@ -172,6 +177,14 @@ object QuickJsMacroRunner {
             MacroAccessibilityService.instance?.performSwipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs.toLong())
         }
         @JavascriptInterface fun getPixel(x: Int, y: Int): Int = ScreenCaptureHolder.getPixel(x, y)
+        
+        // 🔥 OVERLAY CONTROLS
+        @JavascriptInterface fun overlayHide() { FloatingOverlayService.instance?.setOverlayVisibility(false) }
+        @JavascriptInterface fun overlayShow() { FloatingOverlayService.instance?.setOverlayVisibility(true) }
+        @JavascriptInterface fun overlayText(text: String) { FloatingOverlayService.instance?.setOverlayText(text) }
+        @JavascriptInterface fun overlayMove(x: Int, y: Int) { FloatingOverlayService.instance?.moveOverlay(x, y) }
+        @JavascriptInterface fun overlayColor(hex: String) { FloatingOverlayService.instance?.setOverlayDotColor(hex) }
+
         @JavascriptInterface fun log(msg: String) { mainHandler.post { listener?.onLog(msg) } }
         @JavascriptInterface fun onComplete() { mainHandler.post { if (running.getAndSet(false)) listener?.onCompleted() } }
         @JavascriptInterface fun onCancelled() { mainHandler.post { if (running.getAndSet(false)) listener?.onStopped() } }
