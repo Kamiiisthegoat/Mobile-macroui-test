@@ -1,1 +1,5 @@
+// Option A (Recommended - actively maintained, matches your io.* imports)
+implementation 'io.github.taoweiji.quickjs:quickjs-android:1.4.6'
 
+// Option B (Original cashapp, if you prefer)
+// implementation 'app.cash.quickjs:quickjs-android:0.9.1'
