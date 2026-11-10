@@ -80,7 +80,7 @@ jobs:
           EOF
           fi
 
-      # ── 1. Fix QuickJsMacroRunner.kt (Corrected QuickJS API) ──
+      # ── 1. Fix QuickJsMacroRunner.kt (Corrected Syntax) ──
       - name: Patch QuickJsMacroRunner.kt
         run: |
           cat > android/app/src/main/java/com/kamii/macroexecutor/QuickJsMacroRunner.kt << 'EOF'
@@ -151,8 +151,8 @@ jobs:
 
                       // getPixel(x, y) -> ARGB jint
                       host.registerJavaMethod({ _, args ->
-                          val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod 0
-                          val image = reader.acquireLatestImage() ?: return@registerJavaMethod 0
+                          val reader = ScreenCaptureHolder.imageReader ?: return 0
+                          val image = reader.acquireLatestImage() ?: return 0
                           try {
                               val plane = image.planes[0]
                               NativePixelEngine.getPixelColor(
@@ -170,11 +170,11 @@ jobs:
 
                       // matchPixels(tripletsFlatArray, tolerance) -> Boolean
                       host.registerJavaMethod({ _, args ->
-                          val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod false
-                          val image = reader.acquireLatestImage() ?: return@registerJavaMethod false
+                          val reader = ScreenCaptureHolder.imageReader ?: return false
+                          val image = reader.acquireLatestImage() ?: return false
                           try {
                               val plane = image.planes[0]
-                              val jsArray = args.getArray(0) ?: return@registerJavaMethod false
+                              val jsArray = args.get(0) as? JSArray ?: return false
                               val len = jsArray.length()
                               val triplets = IntArray(len) { i ->
                                   jsArray.getInteger(i)
@@ -195,8 +195,8 @@ jobs:
 
                       // findColor(x1, y1, x2, y2, argbColor, tolerance) -> packed (x<<16)|y, or -1
                       host.registerJavaMethod({ _, args ->
-                          val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod -1
-                          val image = reader.acquireLatestImage() ?: return@registerJavaMethod -1
+                          val reader = ScreenCaptureHolder.imageReader ?: return -1
+                          val image = reader.acquireLatestImage() ?: return -1
                           try {
                               val plane = image.planes[0]
                               NativePixelEngine.findColorInRegion(
@@ -229,7 +229,7 @@ jobs:
               }
           }
           EOF
-          echo "Patched QuickJsMacroRunner.kt with corrected API."
+          echo "Patched QuickJsMacroRunner.kt with corrected syntax."
 
       # ── 2. Patch Gradle Memory Settings (OOM FIX) ──
       - name: Configure Gradle Memory Limits
