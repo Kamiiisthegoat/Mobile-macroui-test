@@ -11,7 +11,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object QuickJsMacroRunner {
 
-    // 🔥 ADDED: So the Floating Overlay can access the last script you ran
     var lastExecutedScript: String? = null
 
     interface Listener {
@@ -27,6 +26,7 @@ object QuickJsMacroRunner {
     private var webView: WebView? = null
     private val running = AtomicBoolean(false)
 
+    // 🔥 UPDATED: Auto.js Compatibility Layer added
     private val BOOTSTRAP = """
         (function() {
             let __cancelled = false;
@@ -48,6 +48,50 @@ object QuickJsMacroRunner {
                     setTimeout(() => { __cancelReject = null; resolve(); }, ms);
                 });
             }
+
+            // --- AUTO.JS COMPATIBILITY LAYER ---
+            
+            // 1. Native Inputs
+            function press(x, y, duration) { host.press(x, y, duration || 50); }
+            function tap(x, y) { host.press(x, y, 50); }
+            function longPress(x, y, duration) { host.longPress(x, y, duration || 1000); }
+            function swipe(x1, y1, x2, y2, duration) { host.swipe(x1, y1, x2, y2, duration || 300); }
+            function toast(msg) { host.log("[TOAST] " + msg); }
+
+            // 2. Screen Capture (Simulated for Auto.js compatibility)
+            // Auto.js uses image objects. We fake it because our native engine reads pixels live.
+            function captureScreen() { return { __fake_image: true }; }
+            
+            const images = {
+                pixel: function(img, x, y) {
+                    const packed = host.getPixel(x, y);
+                    return packed; // Returns ARGB Integer
+                }
+            };
+
+            // 3. Colors Module
+            const colors = {
+                parseColor: function(hex) {
+                    // Auto.js returns an ARGB integer
+                    hex = hex.replace('#', '');
+                    return (0xFF000000 | parseInt(hex, 16)) | 0; 
+                },
+                isSimilar: function(color1, color2, threshold) {
+                    // If they pass ARGB ints, we compare RGB channels
+                    const r1 = (color1 >> 16) & 0xFF, g1 = (color1 >> 8) & 0xFF, b1 = color1 & 0xFF;
+                    const r2 = (color2 >> 16) & 0xFF, g2 = (color2 >> 8) & 0xFF, b2 = color2 & 0xFF;
+                    return Math.abs(r1 - r2) <= threshold && Math.abs(g1 - g2) <= threshold && Math.abs(b1 - b2) <= threshold;
+                }
+            };
+
+            // 4. Threading (Mapped to standard async/await)
+            const threads = {
+                start: function(fn) { setTimeout(fn, 0); }
+            };
+            
+            function exit() { throw new Error("Script exited by user"); }
+
+            // --- END COMPATIBILITY LAYER ---
 
             async function waitFor(fn, timeoutMs, pollMs) {
                 pollMs = pollMs || 50;
@@ -78,20 +122,31 @@ object QuickJsMacroRunner {
             console.error = function() { host.log('[error] ' + Array.from(arguments).join(' ')); __origError.apply(console, arguments); };
             console.warn  = function() { host.log('[warn] '  + Array.from(arguments).join(' ')); __origWarn.apply(console, arguments); };
 
+            // Expose everything to the global window object
             window.sleep    = sleep;
             window.waitFor  = waitFor;
             window.log      = log;
             window.setStatus = setStatus;
             window.colorAt  = colorAt;
             window.__cancel = __cancel;
+            
+            // Auto.js globals
+            window.press = press;
+            window.tap = tap;
+            window.longPress = longPress;
+            window.swipe = swipe;
+            window.toast = toast;
+            window.captureScreen = captureScreen;
+            window.images = images;
+            window.colors = colors;
+            window.threads = threads;
+            window.exit = exit;
         })();
     """.trimIndent()
 
     @SuppressLint("SetJavaScriptEnabled")
     fun execute(context: Context, script: String, listener: Listener) {
-        // 🔥 ADDED: Save the script so the Floating Overlay can run it later
         lastExecutedScript = script
-
         stop(silent = true)
         this.listener = listener
         running.set(true)
@@ -156,24 +211,18 @@ object QuickJsMacroRunner {
     }
 
     class HostBridge {
-
-        // Support the old tap
         @JavascriptInterface
-        fun tap(x: Int, y: Int) {
-            press(x, y, 50) // Default 50ms
-        }
+        fun tap(x: Int, y: Int) { press(x, y, 50) }
 
-        // Add the new press() to match Auto.js exactly
         @JavascriptInterface
         fun press(x: Int, y: Int, durationMs: Int) {
             val svc = MacroAccessibilityService.instance
             if (svc == null) {
-                log("❌ ERROR: Accessibility Service is not connected! Go to Settings and turn it ON.")
+                log("❌ ERROR: Accessibility Service is not connected!")
                 return
             }
             val ok = svc.performTap(x.toFloat(), y.toFloat(), durationMs.toLong())
-            if (ok) log("✅ Dispatched press to ($x, $y) for ${durationMs}ms")
-            else log("❌ Failed to dispatch press to ($x, $y). Does the screen have FLAG_SECURE enabled?")
+            if (!ok) log("❌ Failed to dispatch press to ($x, $y).")
         }
 
         @JavascriptInterface
@@ -190,30 +239,11 @@ object QuickJsMacroRunner {
         fun getPixel(x: Int, y: Int): Int = ScreenCaptureHolder.getPixel(x, y)
 
         @JavascriptInterface
-        fun matchPixels(csv: String, tolerance: Int): Boolean {
-            return try {
-                val parts = csv.split(",").map { it.trim().toInt() }
-                ScreenCaptureHolder.matchPixels(IntArray(parts.size) { parts[it] }, tolerance)
-            } catch (_: Exception) { false }
-        }
-
-        @JavascriptInterface
-        fun findColor(x1: Int, y1: Int, x2: Int, y2: Int, hex: String, tolerance: Int): String {
-            return try {
-                val color = hex.removePrefix("#").toLong(16).toInt()
-                ScreenCaptureHolder.findColor(x1, y1, x2, y2, color, tolerance)?.let { "${it.first},${it.second}" } ?: "-1,-1"
-            } catch (_: Exception) { "-1,-1" }
-        }
-
-        @JavascriptInterface
         fun log(msg: String) { mainHandler.post { listener?.onLog(msg) } }
-
         @JavascriptInterface
         fun onComplete() { mainHandler.post { if (running.getAndSet(false)) listener?.onCompleted() } }
-
         @JavascriptInterface
         fun onCancelled() { mainHandler.post { if (running.getAndSet(false)) listener?.onStopped() } }
-
         @JavascriptInterface
         fun onError(message: String, stack: String) { mainHandler.post { if (running.getAndSet(false)) listener?.onError(message, stack.ifBlank { null }) } }
     }
