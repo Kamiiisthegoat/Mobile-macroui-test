@@ -1,172 +1,130 @@
 package com.kamii.macroexecutor
 
-import android.app.Service
-import android.content.Context
+import android.app.*
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
-import android.provider.Settings
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.WindowManager
-import android.widget.LinearLayout
-import android.widget.TextView
-import kotlin.math.abs
+import android.view.*
+import android.widget.*
+import androidx.core.app.NotificationCompat
 
 class FloatingOverlayService : Service() {
 
-    companion object {
-        @Volatile var isRunning: Boolean = false
-            private set
-
-        fun canDrawOverlays(context: Context): Boolean =
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
-
-        fun start(context: Context) {
-            if (!canDrawOverlays(context)) return
-            val intent = Intent(context, FloatingOverlayService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-        }
-
-        fun stop(context: Context) {
-            context.stopService(Intent(context, FloatingOverlayService::class.java))
-        }
-    }
-
     private lateinit var windowManager: WindowManager
-    private var overlayView: View? = null
-    private lateinit var params: WindowManager.LayoutParams
-    private lateinit var statusDot: TextView
-    private lateinit var statusLabel: TextView
+    private lateinit var overlayView: View
+    private var isRunning = false
+
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        isRunning = true
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createOverlay()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val notification = createNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(2, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(2, notification)
+        }
+        return START_STICKY
+    }
+
+    private fun createNotification(): Notification {
+        val channelId = "overlay_channel"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(channelId, "Overlay", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+        return NotificationCompat.Builder(this, channelId)
+            .setContentTitle("MacroExecutor")
+            .setContentText("Floating controls active")
+            .setSmallIcon(android.R.drawable.ic_menu_manage)
+            .build()
+    }
+
     private fun createOverlay() {
-        val dp = resources.displayMetrics.density
-        fun Int.dp() = (this * dp).toInt()
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, // Let touches pass through outside the button
+            PixelFormat.TRANSLUCENT
+        )
+        params.gravity = Gravity.TOP or Gravity.START
+        params.x = 100; params.y = 200
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(12.dp(), 8.dp(), 12.dp(), 8.dp())
-            background = GradientDrawable().apply {
-                cornerRadius = 24f * dp
-                setColor(Color.parseColor("#CC1E1E2E"))
-                setStroke(2.dp(), Color.parseColor("#555566"))
+            setBackgroundColor(0xCC222222.toInt())
+            setPadding(16, 8, 16, 8)
+        }
+
+        val statusDot = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(24, 24).apply { marginEnd = 16 }
+            setBackgroundColor(Color.RED) // Red = Stopped
+        }
+
+        val playStopBtn = Button(this).apply {
+            text = "PLAY"
+            setOnClickListener {
+                isRunning = !isRunning
+                text = if (isRunning) "STOP" else "PLAY"
+                statusDot.setBackgroundColor(if (isRunning) Color.GREEN else Color.RED)
+                
+                if (isRunning) {
+                    // The React UI handles script execution. If you want to run a default script:
+                    // QuickJsMacroRunner.execute(this@FloatingOverlayService, "log('Started from overlay');")
+                } else {
+                    QuickJsMacroRunner.stop()
+                }
             }
-        }
-
-        statusDot = TextView(this).apply {
-            text = "\u25CF" // ●
-            textSize = 14f
-            setTextColor(Color.parseColor("#888899"))
-            setPadding(0, 0, 6.dp(), 0)
-        }
-
-        statusLabel = TextView(this).apply {
-            text = "START"
-            textSize = 12f
-            setTextColor(Color.WHITE)
-            setPadding(0, 0, 10.dp(), 0)
-        }
-
-        val stopButton = TextView(this).apply {
-            text = "STOP"
-            textSize = 12f
-            setTextColor(Color.parseColor("#FF6B6B"))
-            setPadding(6.dp(), 0, 0, 0)
         }
 
         container.addView(statusDot)
-        container.addView(statusLabel)
-        container.addView(stopButton)
+        container.addView(playStopBtn)
 
-        params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 24.dp()
-            y = 240.dp()
-        }
+        // Make the pill draggable
+        container.setOnTouchListener(object : View.OnTouchListener {
+            private var initialX = 0
+            private var initialY = 0
+            private var initialTouchX = 0f
+            private var initialTouchY = 0f
 
-        // Drag to move; tap left half = START; tap right half = STOP.
-        var initialX = 0
-        var initialY = 0
-        var initialTouchX = 0f
-        var initialTouchY = 0f
-        var moved = false
-
-        container.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
-                    moved = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - initialTouchX).toInt()
-                    val dy = (event.rawY - initialTouchY).toInt()
-                    if (abs(dx) > 10 || abs(dy) > 10) moved = true
-                    params.x = (initialX + dx).coerceAtLeast(0)
-                    params.y = (initialY + dy).coerceAtLeast(0)
-                    windowManager.updateViewLayout(container, params)
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) {
-                        if (event.rawX > container.width * 0.55f) {
-                            // STOP was tapped
-                            QuickJsMacroRunner.stop()
-                            updateStatus("STOPPED", "#FF6B6B")
-                        } else {
-                            // START was tapped
-                            updateStatus("READY", "#4CAF50")
-                        }
+            override fun onTouch(v: View?, event: MotionEvent): Boolean {
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = params.x
+                        initialY = params.y
+                        initialTouchX = event.rawX
+                        initialTouchY = event.rawY
+                        return true
                     }
-                    true
+                    MotionEvent.ACTION_MOVE -> {
+                        params.x = initialX + (event.rawX - initialTouchX).toInt()
+                        params.y = initialY + (event.rawY - initialTouchY).toInt()
+                        windowManager.updateViewLayout(overlayView, params)
+                        return true
+                    }
                 }
-                else -> false
+                return false
             }
-        }
+        })
 
         overlayView = container
-        windowManager.addView(container, params)
-    }
-
-    private fun updateStatus(label: String, colorHex: String) {
-        statusLabel.text = label
-        statusDot.setTextColor(Color.parseColor(colorHex))
+        windowManager.addView(overlayView, params)
     }
 
     override fun onDestroy() {
-        overlayView?.let {
-            runCatching { windowManager.removeView(it) }
-        }
-        overlayView = null
-        isRunning = false
         super.onDestroy()
+        if (::overlayView.isInitialized) {
+            windowManager.removeView(overlayView)
+        }
     }
-
-    override fun onBind(intent: Intent?): IBinder? = null
 }
