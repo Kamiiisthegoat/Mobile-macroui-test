@@ -81,7 +81,7 @@ jobs:
           EOF
           fi
 
-      # ── 1. Overwrite QuickJsMacroRunner.kt (FIXED TYPES & SYNTAX) ──
+      # ── 1. Overwrite QuickJsMacroRunner.kt (Safest possible Kotlin syntax) ──
       - name: Patch QuickJsMacroRunner.kt
         run: |
           cat > android/app/src/main/java/com/kamii/macroexecutor/QuickJsMacroRunner.kt << 'EOF'
@@ -106,9 +106,7 @@ jobs:
               }
 
               suspend fun execute(script: String): String = withContext(Dispatchers.Default) {
-                  if (running) {
-                      return@withContext "ERROR: already running"
-                  }
+                  if (running) return@withContext "ERROR: already running"
                   running = true
 
                   var runtime: QuickJS? = null
@@ -121,130 +119,104 @@ jobs:
                       val host = JSObject(context)
 
                       host.registerJavaMethod({ _, args ->
-                          try {
-                              val x = (args.get(0) as Number).toFloat()
-                              val y = (args.get(1) as Number).toFloat()
-                              val d = if (args.length() > 2) (args.get(2) as Number).toLong() else 50L
-                              MacroAccessibilityService.instance?.performTap(x, y, d) ?: false
-                          } catch (e: Exception) {
-                              false
-                          }
+                          val x = (args.get(0) as? Number)?.toFloat() ?: 0f
+                          val y = (args.get(1) as? Number)?.toFloat() ?: 0f
+                          val d = if (args.length() > 2) (args.get(2) as? Number)?.toLong() ?: 50L else 50L
+                          MacroAccessibilityService.instance?.performTap(x, y, d) ?: false
                       }, "tap")
 
                       host.registerJavaMethod({ _, args ->
-                          try {
-                              MacroAccessibilityService.instance?.performSwipe(
-                                  (args.get(0) as Number).toFloat(),
-                                  (args.get(1) as Number).toFloat(),
-                                  (args.get(2) as Number).toFloat(),
-                                  (args.get(3) as Number).toFloat(),
-                                  (args.get(4) as Number).toLong()
-                              ) ?: false
-                          } catch (e: Exception) {
-                              false
-                          }
+                          val x1 = (args.get(0) as? Number)?.toFloat() ?: 0f
+                          val y1 = (args.get(1) as? Number)?.toFloat() ?: 0f
+                          val x2 = (args.get(2) as? Number)?.toFloat() ?: 0f
+                          val y2 = (args.get(3) as? Number)?.toFloat() ?: 0f
+                          val d = (args.get(4) as? Number)?.toLong() ?: 100L
+                          MacroAccessibilityService.instance?.performSwipe(x1, y1, x2, y2, d) ?: false
                       }, "swipe")
 
                       host.registerJavaMethod({ _, args ->
-                          try {
-                              val ms = (args.get(0) as Number).toLong()
-                              var remaining = ms
-                              while (remaining > 0 && running) {
-                                  val chunk = minOf(remaining, 50L)
-                                  SystemClock.sleep(chunk)
-                                  remaining -= chunk
-                              }
-                              running
-                          } catch (e: Exception) {
-                              false
+                          val ms = (args.get(0) as? Number)?.toLong() ?: 0L
+                          var remaining = ms
+                          while (remaining > 0 && running) {
+                              val chunk = minOf(remaining, 50L)
+                              SystemClock.sleep(chunk)
+                              remaining -= chunk
                           }
+                          running
                       }, "sleep")
 
                       host.registerJavaMethod({ _, args ->
-                          try {
-                              val reader = ScreenCaptureHolder.imageReader
-                              val image = reader?.acquireLatestImage()
-                              if (image != null) {
-                                  try {
-                                      val plane = image.planes[0]
-                                      NativePixelEngine.getPixelColor(
-                                          plane.buffer,
-                                          image.width,
-                                          image.height,
-                                          plane.rowStride,
-                                          (args.get(0) as Number).toInt(),
-                                          (args.get(1) as Number).toInt()
-                                      )
-                                  } finally {
-                                      image.close()
-                                  }
-                              } else {
-                                  0
+                          val reader = ScreenCaptureHolder.imageReader
+                          val image = reader?.acquireLatestImage()
+                          if (image != null) {
+                              try {
+                                  val x = (args.get(0) as? Number)?.toInt() ?: 0
+                                  val y = (args.get(1) as? Number)?.toInt() ?: 0
+                                  NativePixelEngine.getPixelColor(
+                                      image.planes[0].buffer,
+                                      image.width,
+                                      image.height,
+                                      image.planes[0].rowStride,
+                                      x, y
+                                  )
+                              } finally {
+                                  image.close()
                               }
-                          } catch (e: Exception) {
+                          } else {
                               0
                           }
                       }, "getPixel")
 
                       host.registerJavaMethod({ _, args ->
-                          try {
-                              val reader = ScreenCaptureHolder.imageReader
-                              val image = reader?.acquireLatestImage()
-                              if (image != null) {
-                                  try {
-                                      val plane = image.planes[0]
-                                      val len = args.length()
-                                      if (len < 4 || (len - 1) % 3 != 0) {
-                                          false
-                                      } else {
-                                          val tolerance = (args.get(len - 1) as Number).toInt()
-                                          val triplets = IntArray(len - 1) { i -> (args.get(i) as Number).toInt() }
-                                          NativePixelEngine.matchMultiPixels(
-                                              plane.buffer,
-                                              image.width,
-                                              image.height,
-                                              plane.rowStride,
-                                              triplets,
-                                              tolerance
-                                          )
-                                      }
-                                  } finally {
-                                      image.close()
+                          val reader = ScreenCaptureHolder.imageReader
+                          val image = reader?.acquireLatestImage()
+                          if (image != null) {
+                              try {
+                                  val len = args.length()
+                                  if (len < 4 || (len - 1) % 3 != 0) {
+                                      false
+                                  } else {
+                                      val tolerance = (args.get(len - 1) as? Number)?.toInt() ?: 10
+                                      val triplets = IntArray(len - 1) { i -> (args.get(i) as? Number)?.toInt() ?: 0 }
+                                      NativePixelEngine.matchMultiPixels(
+                                          image.planes[0].buffer,
+                                          image.width,
+                                          image.height,
+                                          image.planes[0].rowStride,
+                                          triplets,
+                                          tolerance
+                                      )
                                   }
-                              } else {
-                                  false
+                              } finally {
+                                  image.close()
                               }
-                          } catch (e: Exception) {
+                          } else {
                               false
                           }
                       }, "matchPixels")
 
                       host.registerJavaMethod({ _, args ->
-                          try {
-                              val reader = ScreenCaptureHolder.imageReader
-                              val image = reader?.acquireLatestImage()
-                              if (image != null) {
-                                  try {
-                                      val plane = image.planes[0]
-                                      NativePixelEngine.findColorInRegion(
-                                          plane.buffer,
-                                          image.width,
-                                          image.height,
-                                          plane.rowStride,
-                                          (args.get(0) as Number).toInt(),
-                                          (args.get(1) as Number).toInt(),
-                                          (args.get(2) as Number).toInt(),
-                                          (args.get(3) as Number).toInt(),
-                                          (args.get(4) as Number).toInt(),
-                                          (args.get(5) as Number).toInt()
-                                      )
-                                  } finally {
-                                      image.close()
-                                  }
-                              } else {
-                                  -1
+                          val reader = ScreenCaptureHolder.imageReader
+                          val image = reader?.acquireLatestImage()
+                          if (image != null) {
+                              try {
+                                  val x1 = (args.get(0) as? Number)?.toInt() ?: 0
+                                  val y1 = (args.get(1) as? Number)?.toInt() ?: 0
+                                  val x2 = (args.get(2) as? Number)?.toInt() ?: 0
+                                  val y2 = (args.get(3) as? Number)?.toInt() ?: 0
+                                  val color = (args.get(4) as? Number)?.toInt() ?: 0
+                                  val tol = (args.get(5) as? Number)?.toInt() ?: 10
+                                  NativePixelEngine.findColorInRegion(
+                                      image.planes[0].buffer,
+                                      image.width,
+                                      image.height,
+                                      image.planes[0].rowStride,
+                                      x1, y1, x2, y2, color, tol
+                                  )
+                              } finally {
+                                  image.close()
                               }
-                          } catch (e: Exception) {
+                          } else {
                               -1
                           }
                       }, "findColor")
@@ -264,7 +236,7 @@ jobs:
           EOF
           echo "Patched QuickJsMacroRunner.kt"
 
-      # ── 2. Overwrite FloatingOverlayService.kt (SAFE BACKGROUND SERVICE) ──
+      # ── 2. Overwrite FloatingOverlayService.kt ──
       - name: Patch FloatingOverlayService.kt
         run: |
           cat > android/app/src/main/java/com/kamii/macroexecutor/FloatingOverlayService.kt << 'EOF'
@@ -444,14 +416,14 @@ jobs:
       - name: Configure Gradle Memory Limits
         run: |
           cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+UseG1GC
+          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+UseG1GC
           kotlin.compiler.execution.strategy=in-process
           android.useAndroidX=true
           android.enableJetifier=true
           EOF
-          echo "Configured Gradle to run Kotlin compiler in-process with 6GB heap."
+          echo "Configured Gradle to run Kotlin compiler in-process with 4GB heap."
 
-      # ── 4. Patch Root Gradle for Kotlin Plugin ──
+      # ── 4. Patch Root Gradle for Kotlin 2.0.21 ──
       - name: Patch root Gradle file
         run: |
           python3 - << 'PY'
@@ -464,11 +436,11 @@ jobs:
               match = re.search(r'dependencies\s*\{', content)
               if match:
                   insert_pos = match.end()
-                  dep = '\n        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"\n'
+                  dep = '\n        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21"\n'
                   content = content[:insert_pos] + dep + content[insert_pos:]
                   with open(root_gradle, 'w') as f:
                       f.write(content)
-                  print("Injected Kotlin Gradle Plugin into root build.gradle.")
+                  print("Injected Kotlin 2.0.21 Gradle Plugin into root build.gradle.")
           PY
 
       # ── 5. Patch App Gradle for NDK, CMake, and Dependencies ──
@@ -495,25 +467,43 @@ jobs:
               match = re.search(r'dependencies\s*\{', content)
               if match:
                   insert_pos = match.end()
-                  deps = '\n    implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")\n    implementation "org.jetbrains.kotlin:kotlin-stdlib"\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
+                  # Using Kotlin 2.0.21 and coroutines 1.8.1 to match Capacitor 7
+                  deps = '\n    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\n    implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\n'
                   content = content[:insert_pos] + deps + content[insert_pos:]
 
           with open(file_path, 'w') as f:
               f.write(content)
-          print("Successfully patched app/build.gradle")
+          print("Successfully patched app/build.gradle with Kotlin 2.0.21 compatible dependencies")
           PY
 
-      # ── 6. Compile ──
+      # ── 6. Compile with Smart Error Filter ──
       - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --info
+          ./gradlew assembleDebug --stacktrace --info > gradle-build.log 2>&1 || { 
+            echo "==============================================="
+            echo "❌ BUILD FAILED - KOTLIN ERRORS ONLY:"
+            echo "==============================================="
+            grep "e: file://" gradle-build.log || echo "No standard Kotlin errors found. Showing last 30 lines:"
+            tail -n 30 gradle-build.log
+            echo "==============================================="
+            exit 1
+          }
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: MacroExecutor-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
-          if-no-files-found: error 
+          if-no-files-found: error
+
+      - name: Upload Gradle Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: android/gradle-build.log
+          retention-days: 3
