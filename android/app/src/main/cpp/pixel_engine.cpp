@@ -1,142 +1,91 @@
 #include <jni.h>
 #include <cstdint>
-#include <cstdlib>
-#include <cmath>
 #include <algorithm>
 #include <android/log.h>
 
 #define LOG_TAG "MacroEngine"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-namespace {
-
-// RGBA_8888 memory layout: 4 bytes per pixel, order R,G,B,A.
-// Returns ARGB jint (0xAARRGGBB).
-jint nativeGetPixelColor(JNIEnv* env, jobject /*thiz*/,
-                         jobject buffer, jint width, jint height,
-                         jint rowStride, jint x, jint y) {
-    if (buffer == nullptr) return 0;
-    if (x < 0 || y < 0 || x >= width || y >= height) return 0;
-
-    auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
-    if (base == nullptr) return 0;
-
-    const uint8_t* px = base + (static_cast<size_t>(y) * rowStride) + (static_cast<size_t>(x) * 4);
-    return (static_cast<jint>(0xFF) << 24) |
-           (static_cast<jint>(px[0]) << 16) |
-           (static_cast<jint>(px[1]) << 8)  |
-           (static_cast<jint>(px[2]));
+static inline int32_t packRGBA(uint8_t r, uint8_t g, uint8_t b) {
+    return (0xFF << 24) | (r << 16) | (g << 8) | b;
 }
 
-// coordsAndColors: flat array, each 3 ints = one (x, y, ARGB_color) triplet.
-jboolean nativeMatchMultiPixels(JNIEnv* env, jobject /*thiz*/,
-                                jobject buffer, jint width, jint height,
-                                jint rowStride, jintArray coordsAndColors,
-                                jint tolerance) {
-    if (buffer == nullptr || coordsAndColors == nullptr) return JNI_FALSE;
+static inline bool channelMatch(uint8_t c1, uint8_t c2, int tolerance) {
+    return std::abs((int)c1 - (int)c2) <= tolerance;
+}
 
-    auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
-    if (base == nullptr) return JNI_FALSE;
+extern "C" {
 
+JNIEXPORT jint JNICALL
+Java_com_kamii_macroexecutor_NativePixelEngine_getPixelColor(
+        JNIEnv* env, jobject /*this*/,
+        jobject buffer, jint width, jint height, jint rowStride, jint x, jint y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+    uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
+    if (!data) return 0;
+    int offset = y * rowStride + x * 4;
+    if (offset + 3 >= width * height * 4) return 0;
+    return packRGBA(data[offset], data[offset+1], data[offset+2]);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_kamii_macroexecutor_NativePixelEngine_matchMultiPixels(
+        JNIEnv* env, jobject /*this*/,
+        jobject buffer, jint width, jint height, jint rowStride,
+        jintArray coordsAndColors, jint tolerance) {
     jsize len = env->GetArrayLength(coordsAndColors);
     if (len % 3 != 0) return JNI_FALSE;
+    jint* arr = env->GetIntArrayElements(coordsAndColors, nullptr);
+    if (!arr) return JNI_FALSE;
+    uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
+    if (!data) { env->ReleaseIntArrayElements(coordsAndColors, arr, JNI_ABORT); return JNI_FALSE; }
 
-    jint* data = env->GetIntArrayElements(coordsAndColors, nullptr);
-    if (data == nullptr) return JNI_FALSE;
+    jboolean result = JNI_TRUE;
+    for (jsize i = 0; i < len; i += 3) {
+        jint x = arr[i], y = arr[i+1], color = arr[i+2];
+        if (x < 0 || x >= width || y < 0 || y >= height) { result = JNI_FALSE; break; }
+        int offset = y * rowStride + x * 4;
+        if (offset + 3 >= width * height * 4) { result = JNI_FALSE; break; }
 
-    jboolean allMatch = JNI_TRUE;
-    for (jsize i = 0; i + 2 < len; i += 3) {
-        jint x = data[i];
-        jint y = data[i + 1];
-        jint expected = data[i + 2];
-
-        if (x < 0 || y < 0 || x >= width || y >= height) {
-            allMatch = JNI_FALSE;
-            break;
-        }
-
-        const uint8_t* px = base + (static_cast<size_t>(y) * rowStride) + (static_cast<size_t>(x) * 4);
-        int er = (expected >> 16) & 0xFF;
-        int eg = (expected >> 8)  & 0xFF;
-        int eb =  expected        & 0xFF;
-
-        if (std::abs(px[0] - er) > tolerance ||
-            std::abs(px[1] - eg) > tolerance ||
-            std::abs(px[2] - eb) > tolerance) {
-            allMatch = JNI_FALSE;
-            break;
+        uint8_t r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+        if (!channelMatch(data[offset], r, tolerance) ||
+            !channelMatch(data[offset+1], g, tolerance) ||
+            !channelMatch(data[offset+2], b, tolerance)) {
+            result = JNI_FALSE; break;
         }
     }
-
-    env->ReleaseIntArrayElements(coordsAndColors, data, JNI_ABORT);
-    return allMatch;
+    env->ReleaseIntArrayElements(coordsAndColors, arr, JNI_ABORT);
+    return result;
 }
 
-// Returns (x << 16) | (y & 0xFFFF); -1 if not found.
-jint nativeFindColorInRegion(JNIEnv* env, jobject /*thiz*/,
-                             jobject buffer, jint width, jint height,
-                             jint rowStride,
-                             jint startX, jint startY,
-                             jint endX, jint endY,
-                             jint targetColor, jint tolerance) {
-    if (buffer == nullptr) return -1;
+JNIEXPORT jlong JNICALL
+Java_com_kamii_macroexecutor_NativePixelEngine_findColorInRegion(
+        JNIEnv* env, jobject /*this*/,
+        jobject buffer, jint width, jint height, jint rowStride,
+        jint startX, jint startY, jint endX, jint endY,
+        jint targetColor, jint tolerance) {
+    uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
+    if (!data) return -1L;
 
-    auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
-    if (base == nullptr) return -1;
+    startX = std::max(0, startX);
+    startY = std::max(0, startY);
+    endX = std::min((int)width - 1, endX);
+    endY = std::min((int)height - 1, endY);
 
-    int sx = std::max(0, static_cast<int>(startX));
-    int sy = std::max(0, static_cast<int>(startY));
-    int ex = std::min(static_cast<int>(width) - 1,  static_cast<int>(endX));
-    int ey = std::min(static_cast<int>(height) - 1, static_cast<int>(endY));
+    uint8_t tr = (targetColor >> 16) & 0xFF, tg = (targetColor >> 8) & 0xFF, tb = targetColor & 0xFF;
 
-    if (sx > ex || sy > ey) return -1;
-
-    int tr = (targetColor >> 16) & 0xFF;
-    int tg = (targetColor >> 8)  & 0xFF;
-    int tb =  targetColor        & 0xFF;
-
-    for (int y = sy; y <= ey; ++y) {
-        for (int x = sx; x <= ex; ++x) {
-            const uint8_t* px = base + (static_cast<size_t>(y) * rowStride) + (static_cast<size_t>(x) * 4);
-            if (std::abs(px[0] - tr) <= tolerance &&
-                std::abs(px[1] - tg) <= tolerance &&
-                std::abs(px[2] - tb) <= tolerance) {
-                return static_cast<jint>((x << 16) | (y & 0xFFFF));
+    for (int y = startY; y <= endY; ++y) {
+        for (int x = startX; x <= endX; ++x) {
+            int offset = y * rowStride + x * 4;
+            if (offset + 3 >= width * height * 4) continue;
+            if (channelMatch(data[offset], tr, tolerance) &&
+                channelMatch(data[offset+1], tg, tolerance) &&
+                channelMatch(data[offset+2], tb, tolerance)) {
+                return ((jlong)x << 32) | (y & 0xFFFFFFFFL);
             }
         }
     }
-    return -1;
+    return -1L;
 }
 
-const JNINativeMethod kMethods[] = {
-    {"getPixelColor",      "(Ljava/nio/ByteBuffer;IIIII)I",                         reinterpret_cast<void*>(nativeGetPixelColor)},
-    {"matchMultiPixels",   "(Ljava/nio/ByteBuffer;III[II)Z",                        reinterpret_cast<void*>(nativeMatchMultiPixels)},
-    {"findColorInRegion",  "(Ljava/nio/ByteBuffer;IIIIIIIII)I",                     reinterpret_cast<void*>(nativeFindColorInRegion)},
-};
-
-} // namespace
-
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
-    JNIEnv* env = nullptr;
-    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        LOGE("JNI_OnLoad: GetEnv failed");
-        return JNI_ERR;
-    }
-
-    jclass clazz = env->FindClass("com/kamii/macroexecutor/NativePixelEngine");
-    if (clazz == nullptr) {
-        LOGE("JNI_OnLoad: NativePixelEngine class not found");
-        return JNI_ERR;
-    }
-
-    if (env->RegisterNatives(clazz, kMethods,
-                             sizeof(kMethods) / sizeof(kMethods[0])) < 0) {
-        LOGE("JNI_OnLoad: RegisterNatives failed");
-        return JNI_ERR;
-    }
-
-    LOGI("JNI_OnLoad: macroengine loaded, %zu methods registered",
-         sizeof(kMethods) / sizeof(kMethods[0]));
-    return JNI_VERSION_1_6;
-}
+} // extern "C"
