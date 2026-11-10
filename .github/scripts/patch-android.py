@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""
-Patch Capacitor-generated Gradle files for Kotlin, NDK/CMake, and custom deps.
-Idempotent: safe to re-run.
-"""
 import re
 import sys
 
 KOTLIN_VERSION = "1.9.22"
-QUICKJS_COORD = "io.github.taoweiji.quickjs:quickjs-android:1.4.6"
 NDK_VERSION    = "26.1.10909125"
 CMAKE_VERSION  = "3.22.1"
 
-
 def log(msg):
     print(msg)
-
 
 # ---------- 1. ROOT build.gradle: add Kotlin Gradle Plugin classpath ----------
 root_path = "android/build.gradle"
@@ -82,16 +75,15 @@ if "externalNativeBuild" not in app:
     app = app[:insert_at] + injection + app[insert_at:]
     log("✓ App build.gradle: NDK + CMake + kotlinOptions injected")
 
-# 2d. Append custom dependencies
-if "quickjs-android" not in app:
+# 2d. Append Kotlin BOM only (No QuickJS)
+if "kotlin-bom" not in app:
     app += f"""
 
 dependencies {{
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:{KOTLIN_VERSION}"))
-    implementation '{QUICKJS_COORD}'
 }}
 """
-    log("✓ App build.gradle: QuickJS + Kotlin BOM dependencies appended")
+    log("✓ App build.gradle: Kotlin BOM appended")
 
 with open(app_path, "w") as f:
     f.write(app)
