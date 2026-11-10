@@ -17,22 +17,33 @@ import androidx.core.app.NotificationCompat
 
 class FloatingOverlayService : Service() {
 
+    companion object {
+        // 🔥 Allows JavaScript to access the overlay globally
+        @Volatile
+        var instance: FloatingOverlayService? = null
+            private set
+    }
+
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: View
+    private lateinit var layoutParams: WindowManager.LayoutParams
     private var isRunning = false
     
-    // 0 = Toggle, 1 = Single Press, 2 = Arm/Fire
-    private var currentMode = 0
+    private var currentMode = 0 // 0 = TGL, 1 = 1X, 2 = ARM
     private var isArmed = false
 
     private lateinit var statusDot: View
     private lateinit var modeBtn: TextView
     private lateinit var actionBtn: TextView
+    private lateinit var statusText: TextView // 🔥 Added for JS messages
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createOverlay()
     }
@@ -65,17 +76,16 @@ class FloatingOverlayService : Service() {
     }
 
     private fun createOverlay() {
-        val params = WindowManager.LayoutParams(
+        layoutParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         )
-        params.gravity = Gravity.TOP or Gravity.START
-        params.x = 100; params.y = 200
+        layoutParams.gravity = Gravity.TOP or Gravity.START
+        layoutParams.x = 100; layoutParams.y = 200
 
-        // Main Container (Dark, Semi-transparent, Pill-shaped)
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -83,25 +93,32 @@ class FloatingOverlayService : Service() {
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(50).toFloat()
-                setColor(Color.parseColor("#E6121215")) // Sleek dark gray with 90% opacity
-                setStroke(dpToPx(1), Color.parseColor("#333333")) // Subtle border
+                setColor(Color.parseColor("#E6121215"))
+                setStroke(dpToPx(1), Color.parseColor("#333333"))
             }
             background = bg
             elevation = dpToPx(8).toFloat()
         }
 
-        // Status Dot
         val dotBg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(Color.parseColor("#FF4444")) // Red
-            setStroke(dpToPx(2), Color.parseColor("#33FFFFFF")) // White ring
+            setColor(Color.parseColor("#FF4444"))
+            setStroke(dpToPx(2), Color.parseColor("#33FFFFFF"))
         }
         statusDot = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(dpToPx(14), dpToPx(14)).apply { marginEnd = dpToPx(12) }
             background = dotBg
         }
 
-        // Mode Switcher (TGL / 1X / ARM)
+        // Text field for JS to write status (e.g., "Scanning...")
+        statusText = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#AAAAAA"))
+            textSize = 11f
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            setPadding(dpToPx(4), 0, dpToPx(8), 0)
+        }
+
         modeBtn = TextView(this).apply {
             text = "TGL"
             setTextColor(Color.parseColor("#AAAAAA"))
@@ -119,7 +136,6 @@ class FloatingOverlayService : Service() {
             }
         }
 
-        // Action Button (Play/Stop/Arm/Fire)
         actionBtn = TextView(this).apply {
             text = "PLAY"
             setTextColor(Color.WHITE)
@@ -134,14 +150,12 @@ class FloatingOverlayService : Service() {
             setOnClickListener { handleActionClick() }
         }
 
-        val spacer = View(this).apply { layoutParams = LinearLayout.LayoutParams(dpToPx(8), 1) }
-
         container.addView(statusDot)
+        container.addView(statusText) // Added text
         container.addView(modeBtn)
-        container.addView(spacer)
+        container.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dpToPx(8), 1) })
         container.addView(actionBtn)
 
-        // Smooth Drag Logic
         container.setOnTouchListener(object : View.OnTouchListener {
             private var initialX = 0
             private var initialY = 0
@@ -152,7 +166,7 @@ class FloatingOverlayService : Service() {
             override fun onTouch(v: View?, event: MotionEvent): Boolean {
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        initialX = params.x; initialY = params.y
+                        initialX = layoutParams.x; initialY = layoutParams.y
                         initialTouchX = event.rawX; initialTouchY = event.rawY
                         isDragging = false
                         return true
@@ -162,35 +176,54 @@ class FloatingOverlayService : Service() {
                         val dy = (event.rawY - initialTouchY).toInt()
                         if (Math.abs(dx) > 10 || Math.abs(dy) > 10) isDragging = true
                         if (isDragging) {
-                            params.x = initialX + dx
-                            params.y = initialY + dy
-                            windowManager.updateViewLayout(overlayView, params)
+                            layoutParams.x = initialX + dx
+                            layoutParams.y = initialY + dy
+                            windowManager.updateViewLayout(overlayView, layoutParams)
                         }
                         return true
                     }
-                    MotionEvent.ACTION_UP -> {
-                        // If we weren't dragging, let the button clicks handle themselves
-                        return isDragging
-                    }
+                    MotionEvent.ACTION_UP -> return isDragging
                 }
                 return false
             }
         })
 
         overlayView = container
-        windowManager.addView(overlayView, params)
+        windowManager.addView(overlayView, layoutParams)
         updateUI()
+    }
+
+    // 🔥 NEW METHODS FOR JAVASCRIPT TO CALL
+    fun setOverlayText(text: String) {
+        mainHandler.post { statusText.text = text }
+    }
+
+    fun setOverlayVisibility(visible: Boolean) {
+        mainHandler.post { overlayView.visibility = if (visible) View.VISIBLE else View.GONE }
+    }
+
+    fun moveOverlay(x: Int, y: Int) {
+        mainHandler.post {
+            layoutParams.x = x
+            layoutParams.y = y
+            windowManager.updateViewLayout(overlayView, layoutParams)
+        }
+    }
+
+    fun setOverlayDotColor(colorHex: String) {
+        mainHandler.post {
+            try {
+                val color = Color.parseColor(colorHex)
+                (statusDot.background as? GradientDrawable)?.setColor(color)
+            } catch (_: Exception) {}
+        }
     }
 
     private fun handleActionClick() {
         when (currentMode) {
-            0 -> { // TGL Mode
-                if (!isRunning) startScript() else { isRunning = false; QuickJsMacroRunner.stop() }
-            }
-            1 -> { // 1X Mode
-                if (!isRunning) startScript()
-            }
-            2 -> { // ARM Mode
+            0 -> { if (!isRunning) startScript() else { isRunning = false; QuickJsMacroRunner.stop() } }
+            1 -> { if (!isRunning) startScript() }
+            2 -> {
                 if (!isArmed) {
                     isArmed = true
                     if (!isRunning) startScript()
@@ -206,10 +239,9 @@ class FloatingOverlayService : Service() {
 
     private fun startScript() {
         isRunning = true
-        val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: """
-            log("No script loaded.");
-        """.trimIndent()
-
+        setOverlayText("") // Clear old text
+        val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: "log('No script loaded.');"
+        
         QuickJsMacroRunner.execute(this, scriptToRun, object : QuickJsMacroRunner.Listener {
             override fun onStarted() {}
             override fun onLog(message: String) {}
@@ -220,28 +252,29 @@ class FloatingOverlayService : Service() {
     }
 
     private fun resetUi() {
-        Handler(Looper.getMainLooper()).post {
+        mainHandler.post {
             isRunning = false
             isArmed = false
+            statusText.text = ""
             updateUI()
         }
     }
 
     private fun updateUI() {
         when (currentMode) {
-            0 -> { // Toggle
+            0 -> {
                 modeBtn.text = "TGL"
                 actionBtn.text = if (isRunning) "STOP" else "PLAY"
                 (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor(if (isRunning) "#EF4444" else "#4CAF50"))
                 (statusDot.background as? GradientDrawable)?.setColor(Color.parseColor(if (isRunning) "#4CAF50" else "#FF4444"))
             }
-            1 -> { // Single Press
+            1 -> {
                 modeBtn.text = "1X"
                 actionBtn.text = "RUN"
                 (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#3B82F6"))
                 (statusDot.background as? GradientDrawable)?.setColor(Color.parseColor(if (isRunning) "#4CAF50" else "#FF4444"))
             }
-            2 -> { // Arm / Fire
+            2 -> {
                 modeBtn.text = "ARM"
                 actionBtn.text = if (isArmed) "FIRE" else "ARM"
                 (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor(if (isArmed) "#EF4444" else "#F59E0B"))
@@ -252,6 +285,7 @@ class FloatingOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         if (::overlayView.isInitialized) windowManager.removeView(overlayView)
     }
 }
