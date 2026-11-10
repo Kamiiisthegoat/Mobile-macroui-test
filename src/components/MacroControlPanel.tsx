@@ -20,13 +20,13 @@ export const MacroControlPanel: React.FC = () => {
       <h3 className="text-white font-bold text-lg border-b border-[#2a2b30] pb-2">Native Android Bridge</h3>
       
       <div className="grid grid-cols-3 gap-2 text-xs text-center font-mono">
-        <div className={`p-2 rounded border ${status.accessibility ? 'border-green-500 text-green-400' : 'border-red-500 text-red-400'}`}>
+        <div className={`p-2 rounded border ${status.accessibility ? 'border-green-500 text-green-400 bg-green-900/20' : 'border-red-500 text-red-400 bg-red-900/20'}`}>
           Accessibility<br/>{status.accessibility ? 'READY' : 'OFFLINE'}
         </div>
-        <div className={`p-2 rounded border ${status.overlay ? 'border-green-500 text-green-400' : 'border-red-500 text-red-400'}`}>
+        <div className={`p-2 rounded border ${status.overlay ? 'border-green-500 text-green-400 bg-green-900/20' : 'border-red-500 text-red-400 bg-red-900/20'}`}>
           Overlay<br/>{status.overlay ? 'READY' : 'OFFLINE'}
         </div>
-        <div className={`p-2 rounded border ${status.screenCapture ? 'border-green-500 text-green-400' : 'border-red-500 text-red-400'}`}>
+        <div className={`p-2 rounded border ${status.screenCapture ? 'border-green-500 text-green-400 bg-green-900/20' : 'border-red-500 text-red-400 bg-red-900/20'}`}>
           Screen Capture<br/>{status.screenCapture ? 'READY' : 'OFFLINE'}
         </div>
       </div>
