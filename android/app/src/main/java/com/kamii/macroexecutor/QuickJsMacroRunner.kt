@@ -24,7 +24,6 @@ object QuickJsMacroRunner {
     private var webView: WebView? = null
     private val running = AtomicBoolean(false)
 
-    // NOT `const val` — .trimIndent() is a function call, not a compile-time constant.
     private val BOOTSTRAP = """
         (function() {
             let __cancelled = false;
@@ -111,7 +110,6 @@ object QuickJsMacroRunner {
 
     private fun injectAndRun(wv: WebView, script: String) {
         if (!running.get()) return
-
         wv.evaluateJavascript(BOOTSTRAP, null)
 
         val wrapped = """
@@ -139,9 +137,7 @@ object QuickJsMacroRunner {
     fun stop(silent: Boolean = false) {
         val wasRunning = running.getAndSet(false)
         if (!wasRunning) return
-
         if (!silent) mainHandler.post { listener?.onStopped() }
-
         mainHandler.post {
             webView?.evaluateJavascript("try{__cancel()}catch(e){}", null)
             val wv = webView
@@ -153,12 +149,18 @@ object QuickJsMacroRunner {
         }
     }
 
-    // NOT `inner` — object is a singleton, `inner` is illegal here.
     class HostBridge {
 
         @JavascriptInterface
         fun tap(x: Int, y: Int) {
-            MacroAccessibilityService.instance?.performTap(x.toFloat(), y.toFloat(), 50L)
+            val svc = MacroAccessibilityService.instance
+            if (svc == null) {
+                log("❌ ERROR: Accessibility Service is not connected! Go to Settings and turn it ON.")
+                return
+            }
+            val ok = svc.performTap(x.toFloat(), y.toFloat(), 50L)
+            if (ok) log("✅ Dispatched tap to ($x, $y)")
+            else log("❌ Failed to dispatch tap to ($x, $y). Does the screen have FLAG_SECURE enabled?")
         }
 
         @JavascriptInterface
@@ -168,9 +170,7 @@ object QuickJsMacroRunner {
 
         @JavascriptInterface
         fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) {
-            MacroAccessibilityService.instance?.performSwipe(
-                x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs.toLong()
-            )
+            MacroAccessibilityService.instance?.performSwipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs.toLong())
         }
 
         @JavascriptInterface
@@ -188,35 +188,20 @@ object QuickJsMacroRunner {
         fun findColor(x1: Int, y1: Int, x2: Int, y2: Int, hex: String, tolerance: Int): String {
             return try {
                 val color = hex.removePrefix("#").toLong(16).toInt()
-                ScreenCaptureHolder.findColor(x1, y1, x2, y2, color, tolerance)
-                    ?.let { "${it.first},${it.second}" } ?: "-1,-1"
+                ScreenCaptureHolder.findColor(x1, y1, x2, y2, color, tolerance)?.let { "${it.first},${it.second}" } ?: "-1,-1"
             } catch (_: Exception) { "-1,-1" }
         }
 
         @JavascriptInterface
-        fun log(msg: String) {
-            mainHandler.post { listener?.onLog(msg) }
-        }
+        fun log(msg: String) { mainHandler.post { listener?.onLog(msg) } }
 
         @JavascriptInterface
-        fun onComplete() {
-            mainHandler.post {
-                if (running.getAndSet(false)) listener?.onCompleted()
-            }
-        }
+        fun onComplete() { mainHandler.post { if (running.getAndSet(false)) listener?.onCompleted() } }
 
         @JavascriptInterface
-        fun onCancelled() {
-            mainHandler.post {
-                if (running.getAndSet(false)) listener?.onStopped()
-            }
-        }
+        fun onCancelled() { mainHandler.post { if (running.getAndSet(false)) listener?.onStopped() } }
 
         @JavascriptInterface
-        fun onError(message: String, stack: String) {
-            mainHandler.post {
-                if (running.getAndSet(false)) listener?.onError(message, stack.ifBlank { null })
-            }
-        }
+        fun onError(message: String, stack: String) { mainHandler.post { if (running.getAndSet(false)) listener?.onError(message, stack.ifBlank { null }) } }
     }
 }
