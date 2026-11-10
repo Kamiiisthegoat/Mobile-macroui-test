@@ -14,50 +14,42 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 @CapacitorPlugin(name = "MacroBridge")
 class MacroBridgePlugin : Plugin() {
 
-    private val ioScope = CoroutineScope(Dispatchers.Default)
-
     // ── Permission status ────────────────────────────────────
+
+    private fun canDrawOverlays(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+
+    private fun accessibilityReady(): Boolean =
+        MacroAccessibilityService.instance != null
 
     @PluginMethod
     fun isReady(call: PluginCall) {
-        val result = JSObject().apply {
-            put("accessibility", MacroAccessibilityService.isConnected())
-            put("overlay", FloatingOverlayService.canDrawOverlays(context))
-            put("screenCapture", ScreenCaptureHolder.isReady())
-            put(
-                "ready",
-                MacroAccessibilityService.isConnected() &&
-                        FloatingOverlayService.canDrawOverlays(context) &&
-                        ScreenCaptureHolder.isReady()
-            )
-        }
-        call.resolve(result)
+        val acc  = accessibilityReady()
+        val ovl  = canDrawOverlays()
+        val cap  = ScreenCaptureHolder.isReady
+        call.resolve(JSObject().apply {
+            put("accessibility", acc)
+            put("overlay", ovl)
+            put("screenCapture", cap)
+            put("ready", acc && ovl && cap)
+        })
     }
+
+    /** Alias — keeps older UI code working. */
+    @PluginMethod
+    fun checkPermissionsStatus(call: PluginCall) = isReady(call)
 
     // ── One-shot permission wizard ──────────────────────────
 
     @PluginMethod
     fun requestAllPermissions(call: PluginCall) {
-        val result = JSObject().apply {
-            put("accessibility", MacroAccessibilityService.isConnected())
-            put("overlay", FloatingOverlayService.canDrawOverlays(context))
-        }
-
-        if (!MacroAccessibilityService.isConnected()) {
-            openAccessibilitySettingsInternal()
-        }
-        if (!FloatingOverlayService.canDrawOverlays(context)) {
-            openOverlaySettingsInternal()
-        }
-
-        call.resolve(result)
+        if (!accessibilityReady()) openAccessibilitySettingsInternal()
+        if (!canDrawOverlays())     openOverlaySettingsInternal()
+        isReady(call)
     }
 
     @PluginMethod
@@ -68,13 +60,11 @@ class MacroBridgePlugin : Plugin() {
 
     private fun openAccessibilitySettingsInternal() {
         try {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        } catch (_: Exception) {
-            // Some OEM ROMs lack the standard Accessibility settings entry point; fail silently.
-        }
+            context.startActivity(
+                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) { /* OEM ROM may hide this screen */ }
     }
 
     @PluginMethod
@@ -86,21 +76,20 @@ class MacroBridgePlugin : Plugin() {
     private fun openOverlaySettingsInternal() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         try {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:${context.packageName}")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        } catch (_: Exception) {
-            // Fallback: application details page.
-            try {
-                val fallback = Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            context.startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:${context.packageName}")
-                ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                context.startActivity(fallback)
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+            try {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
             } catch (_: Exception) {}
         }
     }
@@ -109,37 +98,28 @@ class MacroBridgePlugin : Plugin() {
 
     @PluginMethod
     fun requestScreenCapture(call: PluginCall) {
+        if (ScreenCaptureHolder.isReady) {
+            call.resolve(JSObject().put("started", true).put("alreadyRunning", true))
+            return
+        }
         val activity = activity ?: run {
             call.reject("No foreground Activity available")
             return
         }
-
-        if (ScreenCaptureHolder.isReady()) {
-            call.resolve(JSObject().put("started", true).put("alreadyRunning", true))
-            return
-        }
-
         val mpm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                 as MediaProjectionManager
-        val intent = mpm.createScreenCaptureIntent()
-        startActivityForResult(call, intent, "screenCaptureResult")
+        startActivityForResult(call, mpm.createScreenCaptureIntent(), "screenCaptureResult")
     }
 
     @ActivityCallback
     fun screenCaptureResult(call: PluginCall?, result: ActivityResult) {
         if (call == null) return
-
         if (result.resultCode != Activity.RESULT_OK || result.data == null) {
             call.reject("Screen capture permission denied")
             return
         }
-
         try {
-            ScreenCaptureService.startWithPermission(
-                context,
-                result.resultCode,
-                result.data!!
-            )
+            ScreenCaptureService.startWithPermission(context, result.resultCode, result.data!!)
             call.resolve(JSObject().put("started", true))
         } catch (e: Exception) {
             call.reject("Failed to start screen capture: ${e.message}")
@@ -150,17 +130,22 @@ class MacroBridgePlugin : Plugin() {
 
     @PluginMethod
     fun startOverlay(call: PluginCall) {
-        if (!FloatingOverlayService.canDrawOverlays(context)) {
+        if (!canDrawOverlays()) {
             call.reject("Overlay permission not granted")
             return
         }
-        FloatingOverlayService.start(context)
-        call.resolve(JSObject().put("running", FloatingOverlayService.isRunning))
+        val intent = Intent(context, FloatingOverlayService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+        call.resolve(JSObject().put("running", true))
     }
 
     @PluginMethod
     fun stopOverlay(call: PluginCall) {
-        FloatingOverlayService.stop(context)
+        context.stopService(Intent(context, FloatingOverlayService::class.java))
         call.resolve(JSObject().put("running", false))
     }
 
@@ -172,22 +157,22 @@ class MacroBridgePlugin : Plugin() {
             call.reject("Missing 'script' parameter")
             return
         }
-        if (!MacroAccessibilityService.isConnected()) {
+        if (!accessibilityReady()) {
             call.reject("Accessibility service not connected")
             return
         }
-        if (!ScreenCaptureHolder.isReady()) {
+        if (!ScreenCaptureHolder.isReady) {
             call.reject("Screen capture not ready")
             return
         }
-
-        ioScope.launch {
-            val outcome = QuickJsMacroRunner.execute(script)
-            activity?.runOnUiThread {
-                call.resolve(JSObject().put("result", outcome))
-            }
-        }
+        // WebView runner switches to Main internally; safe to call from any thread.
+        QuickJsMacroRunner.execute(context, script)
+        call.resolve(JSObject().put("started", true))
     }
+
+    /** Alias — keeps older UI code working. */
+    @PluginMethod
+    fun executeScript(call: PluginCall) = executeQuickJs(call)
 
     @PluginMethod
     fun stopMacro(call: PluginCall) {
@@ -195,14 +180,22 @@ class MacroBridgePlugin : Plugin() {
         call.resolve()
     }
 
+    /** Alias — keeps older UI code working. */
+    @PluginMethod
+    fun stopScript(call: PluginCall) = stopMacro(call)
+
     // ── Debug helpers ───────────────────────────────────────
 
     @PluginMethod
     fun testTap(call: PluginCall) {
-        val x = call.getFloat("x") ?: 540f
-        val y = call.getFloat("y") ?: 960f
-        val ok = MacroAccessibilityService.instance?.performTap(x, y, 50L) ?: false
-        call.resolve(JSObject().put("dispatched", ok))
+        val x = (call.getFloat("x") ?: 540f).toInt()
+        val y = (call.getFloat("y") ?: 960f).toInt()
+        val svc = MacroAccessibilityService.instance ?: run {
+            call.reject("Accessibility service not connected")
+            return
+        }
+        svc.performTap(x, y, 50L)
+        call.resolve(JSObject().put("dispatched", true))
     }
 
     @PluginMethod
@@ -215,24 +208,11 @@ class MacroBridgePlugin : Plugin() {
             call.reject("Missing 'y'")
             return
         }
-        val reader = ScreenCaptureHolder.imageReader ?: run {
+        if (!ScreenCaptureHolder.isReady) {
             call.reject("Screen capture not ready")
             return
         }
-        val image = reader.acquireLatestImage() ?: run {
-            call.reject("No frame available")
-            return
-        }
-        try {
-            val plane = image.planes[0]
-            val color = NativePixelEngine.getPixelColor(
-                plane.buffer, image.width, image.height, plane.rowStride, x, y
-            )
-            call.resolve(JSObject().put("color", color))
-        } catch (e: Exception) {
-            call.reject("Pixel read failed: ${e.message}")
-        } finally {
-            image.close()
-        }
+        val color = ScreenCaptureHolder.getPixel(x, y)
+        call.resolve(JSObject().put("color", color))
     }
 }
