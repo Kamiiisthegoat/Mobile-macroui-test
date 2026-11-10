@@ -2,16 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Foreground service permissions (Android 14 requires explicit types) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-
-    <!-- Overlay and notification permissions -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- Internet (for Capacitor dev server + WebView resource loading) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -24,7 +19,6 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="34">
 
-        <!-- Main Capacitor Activity (launcher) -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
@@ -38,8 +32,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Accessibility Service — MUST be exported so the system can bind to it.
-             Access is protected by BIND_ACCESSIBILITY_SERVICE (signature permission). -->
         <service
             android:name=".MacroAccessibilityService"
             android:exported="true"
@@ -52,13 +44,11 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- MediaProjection Screen Capture Service -->
         <service
             android:name=".ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- Floating Overlay Service (specialUse FGS on Android 14+) -->
         <service
             android:name=".FloatingOverlayService"
             android:exported="false"
@@ -67,6 +57,5 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Floating on-screen controls for user-initiated macro automation" />
         </service>
-
     </application>
 </manifest>
