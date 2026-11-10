@@ -80,14 +80,13 @@ jobs:
           EOF
           fi
 
-      # ── 1. Fix QuickJsMacroRunner.kt and FloatingOverlayService.kt ──
-      - name: Patch Kotlin files
+      # ── 1. Fix QuickJsMacroRunner.kt (Flat Arguments & If/Else) ──
+      - name: Patch QuickJsMacroRunner.kt
         run: |
           cat > android/app/src/main/java/com/kamii/macroexecutor/QuickJsMacroRunner.kt << 'EOF'
           package com.kamii.macroexecutor
 
           import android.os.SystemClock
-          import io.github.taoweiji.quickjs.JSArray
           import io.github.taoweiji.quickjs.JSContext
           import io.github.taoweiji.quickjs.JSObject
           import io.github.taoweiji.quickjs.QuickJS
@@ -174,13 +173,12 @@ jobs:
                           if (image != null) {
                               try {
                                   val plane = image.planes[0]
-                                  val jsArray = args.get(0) as? JSArray
-                                  if (jsArray != null) {
-                                      val len = jsArray.length()
-                                      val triplets = IntArray(len) { i ->
-                                          jsArray.getInteger(i)
-                                      }
-                                      val tolerance = args.getInteger(1)
+                                  val len = args.length()
+                                  if (len < 4 || (len - 1) % 3 != 0) {
+                                      false
+                                  } else {
+                                      val tolerance = args.getInteger(len - 1)
+                                      val triplets = IntArray(len - 1) { i -> args.getInteger(i) }
                                       NativePixelEngine.matchMultiPixels(
                                           plane.buffer,
                                           image.width,
@@ -189,8 +187,6 @@ jobs:
                                           triplets,
                                           tolerance
                                       )
-                                  } else {
-                                      false
                                   }
                               } finally {
                                   image.close()
@@ -239,8 +235,10 @@ jobs:
               }
           }
           EOF
-          echo "Patched QuickJsMacroRunner.kt"
+          echo "Patched QuickJsMacroRunner.kt with flat arguments."
 
+      - name: Patch FloatingOverlayService.kt
+        run: |
           cat > android/app/src/main/java/com/kamii/macroexecutor/FloatingOverlayService.kt << 'EOF'
           package com.kamii.macroexecutor
 
@@ -510,4 +508,4 @@ jobs:
         with:
           name: gradle-build-log
           path: android/gradle-build.log
-          retention-days: 3
+          retention-days: 3 
