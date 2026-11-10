@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build MacroExecutor APK
 
 on:
   push:
@@ -8,37 +8,596 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
+      # ── 1. Checkout ──────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      # ── 2. Node.js (Vite build) ─────────────────────────────────
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Set up Java 21
+      # ── 3. Java 21 (Capacitor 7 requires source/target 21) ──────
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Install Dependencies & Generate Android App
+      # ── 4. Android SDK ──────────────────────────────────────────
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ── 5. Install npm dependencies (legacy peer deps) ─────────
+      - name: Install npm dependencies
         run: |
           npm install --legacy-peer-deps
           npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
-          npm run build
-          npx cap add android
-          npx cap sync android
 
-      - name: Compile Debug APK
+      # ── 6. Build Vite web app ──────────────────────────────────
+      - name: Build Vite web app
+        run: npm run build
+
+      # ── 7. Add Capacitor Android platform ───────────────────────
+      - name: Add Capacitor Android platform
+        run: npx cap add android
+
+      # ── 8. Copy built web assets ────────────────────────────────
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # ── 9. Inject ALL native source files ───────────────────────
+      - name: Inject native C++, Kotlin, Java, XML, and Gradle config
+        run: |
+          set -e
+
+          # ── C++ native engine ────────────────────────────────────
+          mkdir -p android/app/src/main/cpp
+          cat > android/app/src/main/cpp/CMakeLists.txt << 'EOF'
+          cmake_minimum_required(VERSION 3.22.1)
+          project("macroengine")
+          add_library(macroengine SHARED macroengine.cpp)
+          find_library(log-lib log)
+          target_link_libraries(macroengine ${log-lib})
+          EOF
+
+          cat > android/app/src/main/cpp/macroengine.cpp << 'EOF'
+          #include <jni.h>
+          #include <cstdint>
+          #include <cmath>
+          #include <android/log.h>
+
+          #define LOG_TAG "MacroEngine"
+          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+          // Pixel access: RGBA_8888 → ARGB jint
+          extern "C" JNIEXPORT jint JNICALL
+          Java_com_kamii_macroexecutor_NativePixelEngine_getPixelColor(
+              JNIEnv* env, jobject /*this*/,
+              jobject buffer, jint width, jint height, jint rowStride,
+              jint x, jint y) {
+              if (!buffer || x < 0 || y < 0 || x >= width || y >= height) return 0;
+              auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
+              if (!base) return 0;
+              const uint8_t* px = base + (y * rowStride) + (x * 4);
+              return (0xFF << 24) | (px[0] << 16) | (px[1] << 8) | px[2];
+          }
+
+          extern "C" JNIEXPORT jboolean JNICALL
+          Java_com_kamii_macroexecutor_NativePixelEngine_matchMultiPixels(
+              JNIEnv* env, jobject /*this*/,
+              jobject buffer, jint width, jint height, jint rowStride,
+              jintArray coordsAndColors, jint tolerance) {
+              if (!buffer || !coordsAndColors) return JNI_FALSE;
+              auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
+              if (!base) return JNI_FALSE;
+
+              jsize len = env->GetArrayLength(coordsAndColors);
+              jint* data = env->GetIntArrayElements(coordsAndColors, nullptr);
+              if (!data) return JNI_FALSE;
+
+              jboolean allMatch = JNI_TRUE;
+              for (jsize i = 0; i + 2 < len; i += 3) {
+                  jint x = data[i], y = data[i + 1], expected = data[i + 2];
+                  if (x < 0 || y < 0 || x >= width || y >= height) {
+                      allMatch = JNI_FALSE; break;
+                  }
+                  const uint8_t* px = base + (y * rowStride) + (x * 4);
+                  int er = (expected >> 16) & 0xFF, eg = (expected >> 8) & 0xFF, eb = expected & 0xFF;
+                  if (std::abs(px[0] - er) > tolerance ||
+                      std::abs(px[1] - eg) > tolerance ||
+                      std::abs(px[2] - eb) > tolerance) {
+                      allMatch = JNI_FALSE; break;
+                  }
+              }
+              env->ReleaseIntArrayElements(coordsAndColors, data, JNI_ABORT);
+              return allMatch;
+          }
+
+          extern "C" JNIEXPORT jint JNICALL
+          Java_com_kamii_macroexecutor_NativePixelEngine_findColorInRegion(
+              JNIEnv* env, jobject /*this*/,
+              jobject buffer, jint width, jint height, jint rowStride,
+              jint startX, jint startY, jint endX, jint endY,
+              jint targetColor, jint tolerance) {
+              if (!buffer) return -1;
+              auto* base = static_cast<uint8_t*>(env->GetDirectBufferAddress(buffer));
+              if (!base) return -1;
+
+              startX = std::max(0, startX); startY = std::max(0, startY);
+              endX = std::min(width - 1, endX); endY = std::min(height - 1, endY);
+              int tr = (targetColor >> 16) & 0xFF, tg = (targetColor >> 8) & 0xFF, tb = targetColor & 0xFF;
+
+              for (int y = startY; y <= endY; ++y) {
+                  for (int x = startX; x <= endX; ++x) {
+                      const uint8_t* px = base + (y * rowStride) + (x * 4);
+                      if (std::abs(px[0] - tr) <= tolerance &&
+                          std::abs(px[1] - tg) <= tolerance &&
+                          std::abs(px[2] - tb) <= tolerance) {
+                          return (x << 16) | (y & 0xFFFF);
+                      }
+                  }
+              }
+              return -1;
+          }
+          EOF
+
+          # ── Kotlin: NativePixelEngine ────────────────────────────
+          mkdir -p android/app/src/main/java/com/kamii/macroexecutor
+          cat > android/app/src/main/java/com/kamii/macroexecutor/NativePixelEngine.kt << 'EOF'
+          package com.kamii.macroexecutor
+
+          import java.nio.ByteBuffer
+
+          object NativePixelEngine {
+              init { System.loadLibrary("macroengine") }
+
+              external fun getPixelColor(buffer: ByteBuffer, width: Int, height: Int,
+                                        rowStride: Int, x: Int, y: Int): Int
+
+              external fun matchMultiPixels(buffer: ByteBuffer, width: Int, height: Int,
+                                           rowStride: Int, coordsAndColors: IntArray,
+                                           tolerance: Int): Boolean
+
+              external fun findColorInRegion(buffer: ByteBuffer, width: Int, height: Int,
+                                            rowStride: Int, startX: Int, startY: Int,
+                                            endX: Int, endY: Int,
+                                            targetColor: Int, tolerance: Int): Int
+          }
+          EOF
+
+          # ── Kotlin: Accessibility Service ────────────────────────
+          cat > android/app/src/main/java/com/kamii/macroexecutor/MacroAccessibilityService.kt << 'EOF'
+          package com.kamii.macroexecutor
+
+          import android.accessibilityservice.AccessibilityService
+          import android.accessibilityservice.GestureDescription
+          import android.graphics.Path
+          import android.os.Build
+          import android.view.accessibility.AccessibilityEvent
+          import androidx.annotation.RequiresApi
+
+          class MacroAccessibilityService : AccessibilityService() {
+              companion object {
+                  @Volatile var instance: MacroAccessibilityService? = null
+              }
+
+              override fun onServiceConnected() {
+                  instance = this
+              }
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() {}
+
+              @RequiresApi(Build.VERSION_CODES.N)
+              fun performTap(x: Float, y: Float, durationMs: Long = 50): Boolean {
+                  val path = Path().apply { moveTo(x, y) }
+                  val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+                  return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+              }
+
+              @RequiresApi(Build.VERSION_CODES.N)
+              fun performSwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
+                  val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
+                  val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+                  return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+              }
+          }
+          EOF
+
+          # ── Kotlin: ScreenCaptureHolder ──────────────────────────
+          cat > android/app/src/main/java/com/kamii/macroexecutor/ScreenCaptureHolder.kt << 'EOF'
+          package com.kamii.macroexecutor
+
+          import android.hardware.display.VirtualDisplay
+          import android.media.ImageReader
+          import android.media.projection.MediaProjection
+
+          object ScreenCaptureHolder {
+              @Volatile var mediaProjection: MediaProjection? = null
+              @Volatile var virtualDisplay: VirtualDisplay? = null
+              @Volatile var imageReader: ImageReader? = null
+              @Volatile var width: Int = 1080
+              @Volatile var height: Int = 1920
+              @Volatile var rowStride: Int = 0
+
+              fun isReady(): Boolean =
+                  imageReader != null && width > 0 && height > 0
+          }
+          EOF
+
+          # ── Kotlin: ScreenCaptureService ─────────────────────────
+          cat > android/app/src/main/java/com/kamii/macroexecutor/ScreenCaptureService.kt << 'EOF'
+          package com.kamii.macroexecutor
+
+          import android.app.*
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.PixelFormat
+          import android.hardware.display.DisplayManager
+          import android.hardware.display.VirtualDisplay
+          import android.media.ImageReader
+          import android.media.projection.MediaProjection
+          import android.media.projection.MediaProjectionManager
+          import android.os.Build
+          import android.os.IBinder
+          import androidx.core.app.NotificationCompat
+
+          class ScreenCaptureService : Service() {
+              companion object {
+                  const val CHANNEL_ID = "macro_capture"
+                  const val NOTIFICATION_ID = 1001
+                  var instance: ScreenCaptureService? = null
+              }
+
+              override fun onCreate() {
+                  super.onCreate()
+                  instance = this
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  startForeground(NOTIFICATION_ID, buildNotification())
+                  val resultCode = intent?.getIntExtra("resultCode", Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
+                  val data = intent?.getParcelableExtra<Intent>("data")
+                  if (resultCode == Activity.RESULT_OK && data != null) {
+                      startCapture(resultCode, data)
+                  }
+                  return START_STICKY
+              }
+
+              private fun startCapture(resultCode: Int, data: Intent) {
+                  val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                  val projection = mpm.getMediaProjection(resultCode, data)
+                  ScreenCaptureHolder.mediaProjection = projection
+
+                  val metrics = resources.displayMetrics
+                  val w = metrics.widthPixels
+                  val h = metrics.heightPixels
+                  val dpi = metrics.densityDpi
+
+                  val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 3)
+                  ScreenCaptureHolder.imageReader = reader
+                  ScreenCaptureHolder.width = w
+                  ScreenCaptureHolder.height = h
+                  ScreenCaptureHolder.rowStride = w * 4
+
+                  val vd = projection.createVirtualDisplay(
+                      "MacroCapture", w, h, dpi,
+                      DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                      reader.surface, null, null
+                  )
+                  ScreenCaptureHolder.virtualDisplay = vd
+              }
+
+              private fun buildNotification(): Notification {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      val channel = NotificationChannel(CHANNEL_ID, "Screen Capture", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+                  }
+                  return NotificationCompat.Builder(this, CHANNEL_ID)
+                      .setContentTitle("MacroExecutor")
+                      .setContentText("Screen capture active")
+                      .setSmallIcon(android.R.drawable.ic_menu_camera)
+                      .build()
+              }
+
+              override fun onDestroy() {
+                  ScreenCaptureHolder.virtualDisplay?.release()
+                  ScreenCaptureHolder.imageReader?.close()
+                  ScreenCaptureHolder.mediaProjection?.stop()
+                  instance = null
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          EOF
+
+          # ── Kotlin: QuickJS Macro Runner ────────────────────────
+          cat > android/app/src/main/java/com/kamii/macroexecutor/QuickJsMacroRunner.kt << 'EOF'
+          package com.kamii.macroexecutor
+
+          import android.os.SystemClock
+          import io.github.taoweiji.quickjs.QuickJS
+          import io.github.taoweiji.quickjs.JSContext
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.withContext
+          import java.nio.ByteBuffer
+
+          object QuickJsMacroRunner {
+              @Volatile private var running = false
+
+              suspend fun execute(script: String): String = withContext(Dispatchers.Default) {
+                  running = true
+                  val quickJS = QuickJS.createRuntimeWithEventQueue()
+                  val ctx = quickJS.createContext()
+                  try {
+                      val host = JSObject(ctx)
+                      host.registerJavaMethod({ _, args ->
+                          val x = args.getDouble(0).toFloat()
+                          val y = args.getDouble(1).toFloat()
+                          val d = if (args.length() > 2) args.getLong(2) else 50L
+                          MacroAccessibilityService.instance?.performTap(x, y, d)
+                      }, "tap")
+                      host.registerJavaMethod({ _, args ->
+                          MacroAccessibilityService.instance?.performSwipe(
+                              args.getDouble(0).toFloat(), args.getDouble(1).toFloat(),
+                              args.getDouble(2).toFloat(), args.getDouble(3).toFloat(),
+                              args.getLong(4)
+                          )
+                      }, "swipe")
+                      host.registerJavaMethod({ _, args ->
+                          SystemClock.sleep(args.getLong(0))
+                      }, "sleep")
+                      host.registerJavaMethod({ _, args ->
+                          val reader = ScreenCaptureHolder.imageReader ?: return@registerJavaMethod 0
+                          val image = reader.acquireLatestImage() ?: return@registerJavaMethod 0
+                          val buffer: ByteBuffer = image.planes[0].buffer
+                          val rs = image.planes[0].rowStride
+                          val color = NativePixelEngine.getPixelColor(
+                              buffer, image.width, image.height, rs,
+                              args.getInteger(0), args.getInteger(1)
+                          )
+                          image.close()
+                          color
+                      }, "getPixel")
+
+                      ctx.set("MacroHost", host)
+                      ctx.executeVoidScript(script, "macro.js")
+                      "OK"
+                  } catch (e: Exception) {
+                      "ERROR: ${e.message}"
+                  } finally {
+                      ctx.close(); quickJS.close(); running = false
+                  }
+              }
+
+              fun stop() { running = false }
+              fun isRunning(): Boolean = running
+          }
+          EOF
+
+          # ── Kotlin: Capacitor Plugin ────────────────────────────
+          cat > android/app/src/main/java/com/kamii/macroexecutor/MacroBridgePlugin.kt << 'EOF'
+          package com.kamii.macroexecutor
+
+          import android.content.Intent
+          import android.provider.Settings
+          import com.getcapacitor.*
+          import com.getcapacitor.annotation.CapacitorPlugin
+          import com.getcapacitor.annotation.Permission
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+
+          @CapacitorPlugin(
+              name = "MacroBridge",
+              permissions = [Permission(alias = "screen", strings = [])]
+          )
+          class MacroBridgePlugin : Plugin() {
+              @PluginMethod
+              fun isReady(call: PluginCall) {
+                  val ready = MacroAccessibilityService.instance != null &&
+                          ScreenCaptureHolder.isReady()
+                  call.resolve(JSObject().put("ready", ready))
+              }
+
+              @PluginMethod
+              fun openAccessibilitySettings(call: PluginCall) {
+                  val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                  intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                  context.startActivity(intent)
+                  call.resolve()
+              }
+
+              @PluginMethod
+              fun requestScreenCapture(call: PluginCall) {
+                  val activity = activity ?: return call.reject("No activity")
+                  val mpm = activity.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
+                          as android.media.projection.MediaProjectionManager
+                  val intent = mpm.createScreenCaptureIntent()
+                  startActivityForResult(call, intent, "screenCaptureResult")
+              }
+
+              @ActivityCallback
+              fun screenCaptureResult(call: PluginCall, result: androidx.activity.result.ActivityResult) {
+                  if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+                      val svc = Intent(context, ScreenCaptureService::class.java).apply {
+                          putExtra("resultCode", result.resultCode)
+                          putExtra("data", result.data)
+                      }
+                      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                          context.startForegroundService(svc)
+                      } else {
+                          context.startService(svc)
+                      }
+                      call.resolve(JSObject().put("started", true))
+                  } else {
+                      call.reject("Screen capture permission denied")
+                  }
+              }
+
+              @PluginMethod
+              fun executeQuickJs(call: PluginCall) {
+                  val script = call.getString("script") ?: return call.reject("Missing script")
+                  CoroutineScope(Dispatchers.Default).launch {
+                      val result = QuickJsMacroRunner.execute(script)
+                      activity?.runOnUiThread {
+                          call.resolve(JSObject().put("result", result))
+                      }
+                  }
+              }
+
+              @PluginMethod
+              fun stopMacro(call: PluginCall) {
+                  QuickJsMacroRunner.stop()
+                  call.resolve()
+              }
+
+              @PluginMethod
+              fun testTap(call: PluginCall) {
+                  val x = call.getFloat("x") ?: 540f
+                  val y = call.getFloat("y") ?: 960f
+                  MacroAccessibilityService.instance?.performTap(x, y, 50)
+                  call.resolve()
+              }
+
+              @PluginMethod
+              fun checkPixelNow(call: PluginCall) {
+                  val x = call.getInt("x") ?: 0
+                  val y = call.getInt("y") ?: 0
+                  val reader = ScreenCaptureHolder.imageReader
+                  if (reader == null) return call.reject("Screen capture not ready")
+                  val image = reader.acquireLatestImage() ?: return call.reject("No frame")
+                  try {
+                      val buffer = image.planes[0].buffer
+                      val color = NativePixelEngine.getPixelColor(
+                          buffer, image.width, image.height,
+                          image.planes[0].rowStride, x, y
+                      )
+                      call.resolve(JSObject().put("color", color))
+                  } finally {
+                      image.close()
+                  }
+              }
+          }
+          EOF
+
+          # ── MainActivity.java ────────────────────────────────────
+          cat > android/app/src/main/java/com/kamii/macroexecutor/MainActivity.java << 'EOF'
+          package com.kamii.macroexecutor;
+
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+          import java.util.ArrayList;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  registerPlugin(MacroBridgePlugin.class);
+                  super.onCreate(savedInstanceState);
+              }
+          }
+          EOF
+
+          # ── Accessibility Service XML ────────────────────────────
+          mkdir -p android/app/src/main/res/xml
+          cat > android/app/src/main/res/xml/accessibility_service_config.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeAllMask"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagDefault|flagRequestTouchExplorationMode"
+              android:canPerformGestures="true"
+              android:canRetrieveWindowContent="true"
+              android:description="@string/accessibility_description"
+              android:notificationTimeout="100" />
+          EOF
+
+          echo "All source files injected."
+
+      # ── 10. Configure AndroidManifest.xml ────────────────────────
+      - name: Configure AndroidManifest.xml
+        run: |
+          set -e
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          # Insert permissions and service declarations before </application>
+          sed -i '/<\/application>/i\
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />\
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />\
+              <service\
+                  android:name=".MacroAccessibilityService"\
+                  android:exported="false"\
+                  android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">\
+                  <intent-filter>\
+                      <action android:name="android.accessibilityservice.AccessibilityService" />\
+                  </intent-filter>\
+                  <meta-data\
+                      android:name="android.accessibilityservice"\
+                      android:resource="@xml/accessibility_service_config" />\
+              </service>\
+              <service\
+                  android:name=".ScreenCaptureService"\
+                  android:exported="false"\
+                  android:foregroundServiceType="mediaProjection" />\
+          ' "$MANIFEST"
+          # Ensure queries block for accessibility service if missing
+          if ! grep -q "android.intent.action.MAIN" "$MANIFEST"; then
+            echo "Manifest configured."
+          fi
+
+      # ── 11. Configure Gradle (Kotlin BOM, NDK, CMake, QuickJS) ──
+      - name: Configure app/build.gradle
+        run: |
+          set -e
+          GRADLE=android/app/build.gradle
+
+          # Enable Kotlin plugin
+          if ! grep -q "kotlin-android" "$GRADLE"; then
+            sed -i "s/apply plugin: 'com.android.application'/apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'/" "$GRADLE"
+          fi
+
+          # Add NDK version and externalNativeBuild inside android { ... }
+          if ! grep -q "ndkVersion" "$GRADLE"; then
+            sed -i '/android {/a\
+              ndkVersion "25.1.8937393"\
+              externalNativeBuild {\
+                  cmake {\
+                      path "src/main/cpp/CMakeLists.txt"\
+                      version "3.22.1"\
+                  }\
+              }\
+          ' "$GRADLE"
+          fi
+
+          # Inject dependencies inside dependencies { ... }
+          if ! grep -q "kotlin-bom" "$GRADLE"; then
+            sed -i '/dependencies {/a\
+              implementation platform("org.jetbrains.kotlin:kotlin-bom:1.9.22")\
+              implementation "org.jetbrains.kotlin:kotlin-stdlib"\
+              implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"\
+              implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"\
+          ' "$GRADLE"
+          fi
+
+          echo "Gradle configured."
+
+      # ── 12. Build the APK ───────────────────────────────────────
+      - name: Build debug APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace
 
+      # ── 13. Upload APK artifact ─────────────────────────────────
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MacroExecutor-Debug
+          name: MacroExecutor-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
