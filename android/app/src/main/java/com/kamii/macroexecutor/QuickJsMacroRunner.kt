@@ -1,144 +1,89 @@
 package com.kamii.macroexecutor
 
-import android.os.SystemClock
-import io.github.taoweiji.quickjs.JSArray
-import io.github.taoweiji.quickjs.JSContext
-import io.github.taoweiji.quickjs.JSObject
-import io.github.taoweiji.quickjs.QuickJS
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import kotlinx.coroutines.*
 
 object QuickJsMacroRunner {
+    private var job: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var webView: WebView? = null
 
-    @Volatile
-    private var running = false
+    @SuppressLint("SetJavaScriptEnabled")
+    fun execute(context: Context, script: String) {
+        stop()
+        job = scope.launch {
+            val wv = WebView(context).apply {
+                settings.javaScriptEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                webViewClient = WebViewClient()
+                addJavascriptInterface(MacroHost(), "host")
+                loadDataWithBaseURL(null, "<html><body></body></html>", "text/html", "UTF-8", null)
+            }
+            webView = wv
 
-    fun isRunning(): Boolean = running
-
-    fun stop() {
-        running = false
-    }
-
-    suspend fun execute(script: String): String = withContext(Dispatchers.Default) {
-        if (running) return@withContext "ERROR: already running"
-        running = true
-
-        var runtime: QuickJS? = null
-        var context: JSContext? = null
-
-        try {
-            runtime = QuickJS.createRuntime()
-            context = runtime.createContext()
-
-            val host = JSObject(context)
-
-            // tap(x, y, [durationMs])
-            host.registerJavaMethod({ _, args ->
-                val x = args.getDouble(0).toFloat()
-                val y = args.getDouble(1).toFloat()
-                val d = if (args.length() > 2) args.getLong(2) else 50L
-                MacroAccessibilityService.instance?.performTap(x, y, d) ?: false
-            }, "tap")
-
-            // swipe(x1, y1, x2, y2, durationMs)
-            host.registerJavaMethod({ _, args ->
-                MacroAccessibilityService.instance?.performSwipe(
-                    args.getDouble(0).toFloat(),
-                    args.getDouble(1).toFloat(),
-                    args.getDouble(2).toFloat(),
-                    args.getDouble(3).toFloat(),
-                    args.getLong(4)
-                ) ?: false
-            }, "swipe")
-
-            // sleep(ms)
-            host.registerJavaMethod({ _, args ->
-                val ms = args.getLong(0)
-                var remaining = ms
-                while (remaining > 0 && running) {
-                    val chunk = minOf(remaining, 50L)
-                    SystemClock.sleep(chunk)
-                    remaining -= chunk
+            // Give WebView a moment to initialise its JS engine, then evaluate
+            wv.postDelayed({
+                if (job?.isActive == true) {
+                    wv.evaluateJavascript(script, null)
                 }
-                running
-            }, "sleep")
-
-            // getPixel(x, y) -> ARGB jint
-            host.registerJavaMethod({ _, args ->
-                val reader = ScreenCaptureHolder.imageReader ?: return 0
-                val image = reader.acquireLatestImage() ?: return 0
-                try {
-                    val plane = image.planes[0]
-                    NativePixelEngine.getPixelColor(
-                        plane.buffer,
-                        image.width,
-                        image.height,
-                        plane.rowStride,
-                        args.getInteger(0),
-                        args.getInteger(1)
-                    )
-                } finally {
-                    image.close()
-                }
-            }, "getPixel")
-
-            // matchPixels(tripletsFlatArray, tolerance) -> Boolean
-            host.registerJavaMethod({ _, args ->
-                val reader = ScreenCaptureHolder.imageReader ?: return false
-                val image = reader.acquireLatestImage() ?: return false
-                try {
-                    val plane = image.planes[0]
-                    val jsArray = args.get(0) as? JSArray ?: return false
-                    val len = jsArray.length()
-                    val triplets = IntArray(len) { i ->
-                        jsArray.getInteger(i)
-                    }
-                    val tolerance = args.getInteger(1)
-                    NativePixelEngine.matchMultiPixels(
-                        plane.buffer,
-                        image.width,
-                        image.height,
-                        plane.rowStride,
-                        triplets,
-                        tolerance
-                    )
-                } finally {
-                    image.close()
-                }
-            }, "matchPixels")
-
-            // findColor(x1, y1, x2, y2, argbColor, tolerance) -> packed (x<<16)|y, or -1
-            host.registerJavaMethod({ _, args ->
-                val reader = ScreenCaptureHolder.imageReader ?: return -1
-                val image = reader.acquireLatestImage() ?: return -1
-                try {
-                    val plane = image.planes[0]
-                    NativePixelEngine.findColorInRegion(
-                        plane.buffer,
-                        image.width,
-                        image.height,
-                        plane.rowStride,
-                        args.getInteger(0),
-                        args.getInteger(1),
-                        args.getInteger(2),
-                        args.getInteger(3),
-                        args.getInteger(4),
-                        args.getInteger(5)
-                    )
-                } finally {
-                    image.close()
-                }
-            }, "findColor")
-
-            context.set("MacroHost", host)
-            context.executeVoidScript(script, "macro.js")
-            "OK"
-        } catch (t: Throwable) {
-            "ERROR: ${t.javaClass.simpleName}: ${t.message}"
-        } finally {
-            runCatching { context?.close() }
-            runCatching { runtime?.close() }
-            running = false
+            }, 300)
         }
     }
-} 
+
+    fun stop() {
+        job?.cancel()
+        job = null
+        webView?.let { wv ->
+            Handler(Looper.getMainLooper()).post { wv.destroy() }
+        }
+        webView = null
+    }
+
+    class MacroHost {
+        @JavascriptInterface
+        fun tap(x: Int, y: Int) {
+            MacroAccessibilityService.instance?.performTap(x, y, 50)
+        }
+
+        @JavascriptInterface
+        fun longPress(x: Int, y: Int, ms: Int) {
+            MacroAccessibilityService.instance?.performLongPress(x, y, ms.toLong())
+        }
+
+        @JavascriptInterface
+        fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, duration: Int) {
+            MacroAccessibilityService.instance?.performSwipe(x1, y1, x2, y2, duration.toLong())
+        }
+
+        @JavascriptInterface
+        fun sleep(ms: Int) {
+            if (job?.isActive == true) Thread.sleep(ms.toLong())
+        }
+
+        @JavascriptInterface
+        fun getPixel(x: Int, y: Int): Int = ScreenCaptureHolder.getPixel(x, y)
+
+        @JavascriptInterface
+        fun matchPixels(csv: String, tolerance: Int): Boolean {
+            val parts = csv.split(",").map { it.trim().toInt() }
+            return ScreenCaptureHolder.matchPixels(IntArray(parts.size) { parts[it] }, tolerance)
+        }
+
+        @JavascriptInterface
+        fun findColor(x1: Int, y1: Int, x2: Int, y2: Int, hex: String, tolerance: Int): String {
+            val color = hex.removePrefix("#").toLong(16).toInt()
+            return ScreenCaptureHolder.findColor(x1, y1, x2, y2, color, tolerance)
+                ?.let { "${it.first},${it.second}" } ?: "-1,-1"
+        }
+
+        @JavascriptInterface
+        fun log(msg: String) = android.util.Log.d("MacroScript", msg)
+    }
+}
