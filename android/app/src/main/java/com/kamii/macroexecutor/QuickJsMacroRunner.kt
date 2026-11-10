@@ -151,16 +151,23 @@ object QuickJsMacroRunner {
 
     class HostBridge {
 
+        // Support the old tap
         @JavascriptInterface
         fun tap(x: Int, y: Int) {
+            press(x, y, 50) // Default 50ms
+        }
+
+        // Add the new press() to match Auto.js exactly
+        @JavascriptInterface
+        fun press(x: Int, y: Int, durationMs: Int) {
             val svc = MacroAccessibilityService.instance
             if (svc == null) {
                 log("❌ ERROR: Accessibility Service is not connected! Go to Settings and turn it ON.")
                 return
             }
-            val ok = svc.performTap(x.toFloat(), y.toFloat(), 50L)
-            if (ok) log("✅ Dispatched tap to ($x, $y)")
-            else log("❌ Failed to dispatch tap. Does the screen have FLAG_SECURE enabled?")
+            val ok = svc.performTap(x.toFloat(), y.toFloat(), durationMs.toLong())
+            if (ok) log("✅ Dispatched press to ($x, $y) for ${durationMs}ms")
+            else log("❌ Failed to dispatch press to ($x, $y). Does the screen have FLAG_SECURE enabled?")
         }
 
         @JavascriptInterface
