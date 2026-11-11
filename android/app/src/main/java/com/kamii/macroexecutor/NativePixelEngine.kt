@@ -25,6 +25,18 @@ object NativePixelEngine {
         tolerance: Int
     ): Boolean
 
+    // 🔥 NEW
+    external fun match3x3(
+        buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        centerX: Int,
+        centerY: Int,
+        targetColor: Int,
+        tolerance: Int
+    ): Boolean
+
     external fun findColorInRegion(
         buffer: ByteBuffer,
         width: Int,
