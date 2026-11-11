@@ -58,6 +58,41 @@ Java_com_kamii_macroexecutor_NativePixelEngine_matchMultiPixels(
     return result;
 }
 
+// 🔥 NEW: Ultra-fast native 3x3 grid scanner
+JNIEXPORT jboolean JNICALL
+Java_com_kamii_macroexecutor_NativePixelEngine_match3x3(
+        JNIEnv* env, jobject /*this*/,
+        jobject buffer, jint width, jint height, jint rowStride,
+        jint centerX, jint centerY, jint targetColor, jint tolerance) {
+    
+    uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
+    if (!data) return JNI_FALSE;
+
+    uint8_t tr = (targetColor >> 16) & 0xFF;
+    uint8_t tg = (targetColor >> 8) & 0xFF;
+    uint8_t tb = targetColor & 0xFF;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        int py = centerY + dy;
+        if (py < 0 || py >= height) continue;
+
+        for (int dx = -1; dx <= 1; ++dx) {
+            int px = centerX + dx;
+            if (px < 0 || px >= width) continue;
+
+            int offset = py * rowStride + px * 4;
+            if (offset + 3 >= width * height * 4) continue;
+            
+            if (channelMatch(data[offset], tr, tolerance) &&
+                channelMatch(data[offset+1], tg, tolerance) &&
+                channelMatch(data[offset+2], tb, tolerance)) {
+                return JNI_TRUE;
+            }
+        }
+    }
+    return JNI_FALSE;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_kamii_macroexecutor_NativePixelEngine_findColorInRegion(
         JNIEnv* env, jobject /*this*/,
