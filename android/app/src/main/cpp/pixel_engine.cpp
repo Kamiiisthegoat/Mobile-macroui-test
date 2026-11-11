@@ -18,8 +18,7 @@ extern "C" {
 
 JNIEXPORT jint JNICALL
 Java_com_kamii_macroexecutor_NativePixelEngine_getPixelColor(
-        JNIEnv* env, jobject /*this*/,
-        jobject buffer, jint width, jint height, jint rowStride, jint x, jint y) {
+        JNIEnv* env, jobject, jobject buffer, jint width, jint height, jint rowStride, jint x, jint y) {
     if (x < 0 || x >= width || y < 0 || y >= height) return 0;
     uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
     if (!data) return 0;
@@ -29,10 +28,37 @@ Java_com_kamii_macroexecutor_NativePixelEngine_getPixelColor(
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_kamii_macroexecutor_NativePixelEngine_match3x3(
+        JNIEnv* env, jobject, jobject buffer, jint width, jint height, jint rowStride,
+        jint centerX, jint centerY, jint targetColor, jint tolerance) {
+    uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
+    if (!data) return JNI_FALSE;
+
+    uint8_t tr = (targetColor >> 16) & 0xFF;
+    uint8_t tg = (targetColor >> 8) & 0xFF;
+    uint8_t tb = targetColor & 0xFF;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        int py = centerY + dy;
+        if (py < 0 || py >= height) continue;
+        for (int dx = -1; dx <= 1; ++dx) {
+            int px = centerX + dx;
+            if (px < 0 || px >= width) continue;
+            int offset = py * rowStride + px * 4;
+            if (offset + 3 >= width * height * 4) continue;
+            if (channelMatch(data[offset], tr, tolerance) &&
+                channelMatch(data[offset+1], tg, tolerance) &&
+                channelMatch(data[offset+2], tb, tolerance)) {
+                return JNI_TRUE;
+            }
+        }
+    }
+    return JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_kamii_macroexecutor_NativePixelEngine_matchMultiPixels(
-        JNIEnv* env, jobject /*this*/,
-        jobject buffer, jint width, jint height, jint rowStride,
-        jintArray coordsAndColors, jint tolerance) {
+        JNIEnv* env, jobject, jobject buffer, jint width, jint height, jint rowStride, jintArray coordsAndColors, jint tolerance) {
     jsize len = env->GetArrayLength(coordsAndColors);
     if (len % 3 != 0) return JNI_FALSE;
     jint* arr = env->GetIntArrayElements(coordsAndColors, nullptr);
@@ -46,11 +72,8 @@ Java_com_kamii_macroexecutor_NativePixelEngine_matchMultiPixels(
         if (x < 0 || x >= width || y < 0 || y >= height) { result = JNI_FALSE; break; }
         int offset = y * rowStride + x * 4;
         if (offset + 3 >= width * height * 4) { result = JNI_FALSE; break; }
-
         uint8_t r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
-        if (!channelMatch(data[offset], r, tolerance) ||
-            !channelMatch(data[offset+1], g, tolerance) ||
-            !channelMatch(data[offset+2], b, tolerance)) {
+        if (!channelMatch(data[offset], r, tolerance) || !channelMatch(data[offset+1], g, tolerance) || !channelMatch(data[offset+2], b, tolerance)) {
             result = JNI_FALSE; break;
         }
     }
@@ -58,69 +81,23 @@ Java_com_kamii_macroexecutor_NativePixelEngine_matchMultiPixels(
     return result;
 }
 
-// 🔥 NEW: Ultra-fast native 3x3 grid scanner
-JNIEXPORT jboolean JNICALL
-Java_com_kamii_macroexecutor_NativePixelEngine_match3x3(
-        JNIEnv* env, jobject /*this*/,
-        jobject buffer, jint width, jint height, jint rowStride,
-        jint centerX, jint centerY, jint targetColor, jint tolerance) {
-    
-    uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
-    if (!data) return JNI_FALSE;
-
-    uint8_t tr = (targetColor >> 16) & 0xFF;
-    uint8_t tg = (targetColor >> 8) & 0xFF;
-    uint8_t tb = targetColor & 0xFF;
-
-    for (int dy = -1; dy <= 1; ++dy) {
-        int py = centerY + dy;
-        if (py < 0 || py >= height) continue;
-
-        for (int dx = -1; dx <= 1; ++dx) {
-            int px = centerX + dx;
-            if (px < 0 || px >= width) continue;
-
-            int offset = py * rowStride + px * 4;
-            if (offset + 3 >= width * height * 4) continue;
-            
-            if (channelMatch(data[offset], tr, tolerance) &&
-                channelMatch(data[offset+1], tg, tolerance) &&
-                channelMatch(data[offset+2], tb, tolerance)) {
-                return JNI_TRUE;
-            }
-        }
-    }
-    return JNI_FALSE;
-}
-
 JNIEXPORT jlong JNICALL
 Java_com_kamii_macroexecutor_NativePixelEngine_findColorInRegion(
-        JNIEnv* env, jobject /*this*/,
-        jobject buffer, jint width, jint height, jint rowStride,
-        jint startX, jint startY, jint endX, jint endY,
-        jint targetColor, jint tolerance) {
+        JNIEnv* env, jobject, jobject buffer, jint width, jint height, jint rowStride, jint startX, jint startY, jint endX, jint endY, jint targetColor, jint tolerance) {
     uint8_t* data = (uint8_t*)env->GetDirectBufferAddress(buffer);
     if (!data) return -1L;
-
-    startX = std::max(0, startX);
-    startY = std::max(0, startY);
-    endX = std::min((int)width - 1, endX);
-    endY = std::min((int)height - 1, endY);
-
+    startX = std::max(0, startX); startY = std::max(0, startY);
+    endX = std::min((int)width - 1, endX); endY = std::min((int)height - 1, endY);
     uint8_t tr = (targetColor >> 16) & 0xFF, tg = (targetColor >> 8) & 0xFF, tb = targetColor & 0xFF;
-
     for (int y = startY; y <= endY; ++y) {
         for (int x = startX; x <= endX; ++x) {
             int offset = y * rowStride + x * 4;
             if (offset + 3 >= width * height * 4) continue;
-            if (channelMatch(data[offset], tr, tolerance) &&
-                channelMatch(data[offset+1], tg, tolerance) &&
-                channelMatch(data[offset+2], tb, tolerance)) {
+            if (channelMatch(data[offset], tr, tolerance) && channelMatch(data[offset+1], tg, tolerance) && channelMatch(data[offset+2], tb, tolerance)) {
                 return ((jlong)x << 32) | (y & 0xFFFFFFFFL);
             }
         }
     }
     return -1L;
 }
-
 } // extern "C"
