@@ -239,14 +239,14 @@ class FloatingOverlayService : Service() {
         setOverlayText("Starting...")
         val scriptToRun = QuickJsMacroRunner.lastExecutedScript ?: "log('No script loaded.');"
         
-        QuickJsMacroRunner.execute(this, scriptToRun, object : QuickJsMacroRunner.Listener {
+        // 🔥 FIX: Pass "{}" as the sharedStateJson parameter to match the new signature
+        QuickJsMacroRunner.execute(this, scriptToRun, "{}", object : QuickJsMacroRunner.Listener {
             override fun onStarted() {}
             override fun onLog(message: String) {}
             
             override fun onCompleted() { resetUi() }
             override fun onStopped() { resetUi() }
             
-            // 🔥 IF THERE IS AN ERROR, SHOW IT ON THE FLOATY!
             override fun onError(message: String, stack: String?) { 
                 mainHandler.post {
                     isRunning = false
@@ -254,7 +254,6 @@ class FloatingOverlayService : Service() {
                     setOverlayText("Error: $message")
                     (statusDot.background as? GradientDrawable)?.setColor(Color.RED)
                     updateUI()
-                    // Wait 3 seconds so you can read the error, then clear it
                     mainHandler.postDelayed({ statusText.text = "" }, 3000)
                 }
             }
