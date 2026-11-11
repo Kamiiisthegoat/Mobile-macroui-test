@@ -28,6 +28,8 @@ class FloatingOverlayService : Service() {
     
     private lateinit var statusDot: View
     private lateinit var actionBtn: TextView
+    private lateinit var statusText: TextView
+    
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -93,6 +95,14 @@ class FloatingOverlayService : Service() {
             background = dotBg
         }
 
+        // Text field for JS to write status
+        statusText = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#AAAAAA"))
+            textSize = 11f
+            setPadding(dpToPx(4), 0, dpToPx(8), 0)
+        }
+
         actionBtn = TextView(this).apply {
             text = "PLAY"
             setTextColor(Color.WHITE)
@@ -112,13 +122,18 @@ class FloatingOverlayService : Service() {
                     
                     val script = QuickJsMacroRunner.lastExecutedScript ?: "log('No script loaded.');"
                     
-                    // 🔥 EXACT FIX: 3rd argument is "{}"
                     QuickJsMacroRunner.execute(this@FloatingOverlayService, script, "{}", object : QuickJsMacroRunner.Listener {
                         override fun onStarted() {}
                         override fun onLog(message: String) {}
                         override fun onCompleted() { reset() }
                         override fun onStopped() { reset() }
-                        override fun onError(message: String, stack: String?) { reset() }
+                        override fun onError(message: String, stack: String?) { 
+                            mainHandler.post {
+                                statusText.text = "Err: ${message.take(15)}"
+                                (statusDot.background as? GradientDrawable)?.setColor(Color.RED)
+                            }
+                            reset() 
+                        }
                     })
                 } else {
                     isRunning = false
@@ -129,6 +144,7 @@ class FloatingOverlayService : Service() {
         }
 
         container.addView(statusDot)
+        container.addView(statusText)
         container.addView(actionBtn)
 
         container.setOnTouchListener(object : View.OnTouchListener {
@@ -167,12 +183,28 @@ class FloatingOverlayService : Service() {
         windowManager.addView(overlayView, layoutParams)
     }
 
+    // --- 🔥 BRIDGE FUNCTIONS FOR JAVASCRIPT ---
+    fun setOverlayText(text: String) { mainHandler.post { statusText.text = text } }
+    fun setOverlayVisibility(visible: Boolean) { mainHandler.post { overlayView.visibility = if (visible) View.VISIBLE else View.GONE } }
+    fun moveOverlay(x: Int, y: Int) { mainHandler.post { layoutParams.x = x; layoutParams.y = y; windowManager.updateViewLayout(overlayView, layoutParams) } }
+    fun setOverlayDotColor(colorHex: String) {
+        mainHandler.post {
+            try {
+                val color = Color.parseColor(colorHex)
+                (statusDot.background as? GradientDrawable)?.setColor(color)
+            } catch (_: Exception) {}
+        }
+    }
+    // ------------------------------------------
+
     private fun reset() {
         mainHandler.post {
             isRunning = false
             actionBtn.text = "PLAY"
             (actionBtn.background as? GradientDrawable)?.setColor(Color.parseColor("#4CAF50"))
             (statusDot.background as? GradientDrawable)?.setColor(Color.RED)
+            // Delay clearing text so user can read error if there was one
+            mainHandler.postDelayed({ if (!isRunning) statusText.text = "" }, 3000)
         }
     }
 
