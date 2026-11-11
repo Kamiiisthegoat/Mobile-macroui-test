@@ -10,15 +10,10 @@ import android.webkit.WebViewClient
 import java.util.concurrent.atomic.AtomicBoolean
 
 object QuickJsMacroRunner {
-
     var lastExecutedScript: String? = null
 
     interface Listener {
-        fun onStarted()
-        fun onLog(message: String)
-        fun onCompleted()
-        fun onStopped()
-        fun onError(message: String, stack: String?)
+        fun onStarted(); fun onLog(message: String); fun onCompleted(); fun onStopped(); fun onError(message: String, stack: String?)
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -30,16 +25,10 @@ object QuickJsMacroRunner {
         (function() {
             let __cancelled = false;
             let __cancelReject = null;
-
             function __cancel() {
                 __cancelled = true;
-                if (__cancelReject) {
-                    const r = __cancelReject;
-                    __cancelReject = null;
-                    r(new Error('__cancelled__'));
-                }
+                if (__cancelReject) { const r = __cancelReject; __cancelReject = null; r(new Error('__cancelled__')); }
             }
-
             function sleep(ms) {
                 return new Promise((resolve, reject) => {
                     if (__cancelled) return reject(new Error('__cancelled__'));
@@ -47,18 +36,13 @@ object QuickJsMacroRunner {
                     setTimeout(() => { __cancelReject = null; resolve(); }, ms);
                 });
             }
-
-            // --- AUTO.JS COMPATIBILITY LAYER ---
+            
+            // --- AUTO.JS COMPATIBILITY ---
             function press(x, y, duration) { host.press(x, y, duration || 50); }
             function tap(x, y) { host.press(x, y, 50); }
             function longPress(x, y, duration) { host.longPress(x, y, duration || 1000); }
             function swipe(x1, y1, x2, y2, duration) { host.swipe(x1, y1, x2, y2, duration || 300); }
-            function toast(msg) { host.log("[TOAST] " + msg); }
             function captureScreen() { return { __fake_image: true }; }
-            
-            // 🔥 FAST 3x3 SCANNER
-            function fastMatch3x3(x, y, hex, tolerance) { return host.match3x3(x, y, hex, tolerance); }
-            
             const images = { pixel: function(img, x, y) { return host.getPixel(x, y); } };
             const colors = {
                 parseColor: function(hex) { hex = hex.replace('#', ''); return (0xFF000000 | parseInt(hex, 16)) | 0; },
@@ -69,17 +53,18 @@ object QuickJsMacroRunner {
                 }
             };
 
-            // --- 🔥 FLOATY OVERLAY API ---
+            // --- FAST NATIVE BRIDGES ---
+            function fastMatch3x3(x, y, hex, tol) { return host.match3x3(x, y, hex, tol); }
+            function dualSwipe(x1, y1, x2, y2, x3, y3, x4, y4, dur) { host.dualSwipe(x1, y1, x2, y2, x3, y3, x4, y4, dur || 30); }
+
+            // --- FLOATY OVERLAY ---
             window.overlay = {
-                hide: function() { host.overlayHide(); },
-                show: function() { host.overlayShow(); },
-                setText: function(text) { host.overlayText(String(text)); },
-                move: function(x, y) { host.overlayMove(x, y); },
+                hide: function() { host.overlayHide(); }, show: function() { host.overlayShow(); },
+                setText: function(text) { host.overlayText(String(text)); }, move: function(x, y) { host.overlayMove(x, y); },
                 setColor: function(hex) { host.overlayColor(hex); }
             };
 
-            window.__isArmed = false;
-            window.__isFired = false;
+            window.__isArmed = false; window.__isFired = false;
             window.onMacroEvent = function(event) {
                 if (event === 'arm') { window.__isArmed = true; window.__isFired = false; }
                 if (event === 'fire') { window.__isFired = true; }
@@ -94,38 +79,24 @@ object QuickJsMacroRunner {
                 }
                 throw new Error('waitFor timeout');
             }
-
             function log(m) { host.log(String(m)); }
             function setStatus(m) { host.log('[status] ' + String(m)); }
 
-            window.sleep    = sleep;
-            window.waitFor  = waitFor;
-            window.log      = log;
-            window.setStatus = setStatus;
-            window.__cancel = __cancel;
-            
-            window.press = press; window.tap = tap; window.longPress = longPress;
-            window.swipe = swipe; window.toast = toast; window.captureScreen = captureScreen;
-            window.images = images; window.colors = colors;
-            window.fastMatch3x3 = fastMatch3x3;
+            window.sleep = sleep; window.waitFor = waitFor; window.log = log; window.setStatus = setStatus; window.__cancel = __cancel;
+            window.press = press; window.tap = tap; window.longPress = longPress; window.swipe = swipe; window.captureScreen = captureScreen;
+            window.images = images; window.colors = colors; window.fastMatch3x3 = fastMatch3x3; window.dualSwipe = dualSwipe;
         })();
     """.trimIndent()
 
     @SuppressLint("SetJavaScriptEnabled")
     fun execute(context: Context, script: String, listener: Listener) {
-        lastExecutedScript = script
-        stop(silent = true)
-        this.listener = listener
-        running.set(true)
-
+        lastExecutedScript = script; stop(silent = true); this.listener = listener; running.set(true)
         mainHandler.post {
             val wv = WebView(context).apply {
                 settings.javaScriptEnabled = true
                 addJavascriptInterface(HostBridge(), "host")
                 webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView, url: String) {
-                        injectAndRun(view, script)
-                    }
+                    override fun onPageFinished(view: WebView, url: String) { injectAndRun(view, script) }
                 }
                 loadDataWithBaseURL(null, "<html><body></body></html>", "text/html", "UTF-8", null)
             }
@@ -134,9 +105,7 @@ object QuickJsMacroRunner {
     }
 
     fun sendEvent(event: String) {
-        mainHandler.post {
-            webView?.evaluateJavascript("if(window.onMacroEvent) window.onMacroEvent('$event');", null)
-        }
+        mainHandler.post { webView?.evaluateJavascript("if(window.onMacroEvent) window.onMacroEvent('$event');", null) }
     }
 
     private fun injectAndRun(wv: WebView, script: String) {
@@ -158,18 +127,12 @@ object QuickJsMacroRunner {
     }
 
     fun stop(silent: Boolean = false) {
-        val wasRunning = running.getAndSet(false)
-        if (!wasRunning) return
+        val wasRunning = running.getAndSet(false); if (!wasRunning) return
         if (!silent) mainHandler.post { listener?.onStopped() }
-        
         mainHandler.post {
             webView?.evaluateJavascript("try{__cancel()}catch(e){}", null)
-            val wv = webView
-            webView = null
-            mainHandler.postDelayed({
-                runCatching { wv?.destroy() }
-                // Don't null the listener, just let it be overwritten on the next execute()
-            }, 400L)
+            val wv = webView; webView = null
+            mainHandler.postDelayed({ runCatching { wv?.destroy() } }, 400L)
         }
     }
 
@@ -184,9 +147,13 @@ object QuickJsMacroRunner {
         @JavascriptInterface fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) {
             MacroAccessibilityService.instance?.performSwipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs.toLong())
         }
+        @JavascriptInterface fun dualSwipe(x1: Int, y1: Int, x2: Int, y2: Int, x3: Int, y3: Int, x4: Int, y4: Int, durationMs: Int) {
+            MacroAccessibilityService.instance?.performDualSwipe(
+                x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(),
+                x3.toFloat(), y3.toFloat(), x4.toFloat(), y4.toFloat(), durationMs.toLong()
+            )
+        }
         @JavascriptInterface fun getPixel(x: Int, y: Int): Int = ScreenCaptureHolder.getPixel(x, y)
-        
-        // 🔥 NEW
         @JavascriptInterface fun match3x3(x: Int, y: Int, hexColor: String, tolerance: Int): Boolean {
             return try {
                 val color = hexColor.removePrefix("#").toLong(16).toInt()
