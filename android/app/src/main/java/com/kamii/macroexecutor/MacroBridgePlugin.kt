@@ -110,7 +110,7 @@ class MacroBridgePlugin : Plugin() {
         
         if (!accessibilityReady()) return call.reject("Accessibility service not connected")
         
-        // 🔥 FIX: Pass the sharedState to QuickJsMacroRunner
+        // 🔥 FIX: Pass the sharedState to the runner
         QuickJsMacroRunner.execute(context, script, sharedStateJson, object : QuickJsMacroRunner.Listener {
             override fun onStarted() { notifyListeners("scriptStatus", JSObject().put("state", "running")) }
             override fun onLog(message: String) { notifyListeners("scriptLog", JSObject().put("message", message)) }
