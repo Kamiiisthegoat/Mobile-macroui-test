@@ -13,11 +13,7 @@ object QuickJsMacroRunner {
     var lastExecutedScript: String? = null
 
     interface Listener {
-        fun onStarted()
-        fun onLog(message: String)
-        fun onCompleted()
-        fun onStopped()
-        fun onError(message: String, stack: String?)
+        fun onStarted(); fun onLog(message: String); fun onCompleted(); fun onStopped(); fun onError(message: String, stack: String?)
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -47,7 +43,7 @@ object QuickJsMacroRunner {
             function longPress(x, y, duration) { host.longPress(x, y, duration || 1000); }
             function swipe(x1, y1, x2, y2, duration) { host.swipe(x1, y1, x2, y2, duration || 300); }
             function toast(msg) { host.log("[TOAST] " + msg); }
-            function wait(ms) { return sleep(ms); } // 🔥 FIX: Added wait()
+            function wait(ms) { return sleep(ms); }
             function exit() { throw new Error("Script exited by user"); }
             
             function captureScreen() { return { __fake_image: true }; }
@@ -98,7 +94,7 @@ object QuickJsMacroRunner {
     """.trimIndent()
 
     @SuppressLint("SetJavaScriptEnabled")
-    fun execute(context: Context, script: String, listener: Listener) {
+    fun execute(context: Context, script: String, sharedStateJson: String = "{}", listener: Listener) {
         lastExecutedScript = script
         stop(silent = true)
         this.listener = listener
@@ -110,6 +106,9 @@ object QuickJsMacroRunner {
                 addJavascriptInterface(HostBridge(), "host")
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
+                        // 🔥 FIX: Inject sharedState before running the script
+                        val stateScript = "window.sharedState = $sharedStateJson;"
+                        view.evaluateJavascript(stateScript, null)
                         injectAndRun(view, script)
                     }
                 }
