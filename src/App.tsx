@@ -37,18 +37,15 @@ import {
   SINGLE_ENGINE_TEMPLATES
 } from './data/defaultConfigs';
 
-// Connect to the Native Android Kotlin Plugin
 const MacroBridge = registerPlugin<any>('MacroBridge');
 
 export default function App() {
-  // Navigation & View States (home, templates, recorder, metrics)
   const [activeTab, setActiveTab] = useState<'home' | 'templates' | 'recorder' | 'metrics'>('home');
   const [engineActive, setEngineActive] = useState<boolean>(false);
   const [multiLanguage, setMultiLanguage] = useState<boolean>(false);
   const [selectedSingleEngine, setSelectedSingleEngine] = useState<ScriptLanguage>('quickjs');
   const [singleEngineCode, setSingleEngineCode] = useState<string>(SINGLE_ENGINE_TEMPLATES['quickjs']);
 
-  // Modals & Overlays
   const [isCoordsPickerOpen, setIsCoordsPickerOpen] = useState(false);
   const [isColorCheckerOpen, setIsColorCheckerOpen] = useState(false);
   const [isHudOpen, setIsHudOpen] = useState(false);
@@ -61,7 +58,6 @@ export default function App() {
 
   const [targetBinding, setTargetBinding] = useState<{ configId: string; targetType: 'soru' | 'portal' } | null>(null);
 
-  // Screen DPI & Resolution Calibration state (enforced before coordinates picking)
   const [screenCalibration, setScreenCalibration] = useState<ScreenCalibration>({
     width: 1080,
     height: 2400,
@@ -70,7 +66,6 @@ export default function App() {
     isCalibrated: false
   });
 
-  // Macro Configurations & Pipeline Steps
   const [configs, setConfigs] = useState<MacroConfig[]>(DEFAULT_MACRO_CONFIGS);
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>(INITIAL_PIPELINE_STEPS);
   const [sharedState, setSharedState] = useState<SharedStateData>({
@@ -79,7 +74,6 @@ export default function App() {
     lastHoldDuration: 800
   });
 
-  // Timing & Speed Settings (Delay between macros in ms)
   const [speedSettings, setSpeedSettings] = useState<SpeedSettings>({
     triggerDelayMs: 5,
     randomDelayMode: false,
@@ -87,11 +81,9 @@ export default function App() {
     smartLoop: true
   });
 
-  // Active Menu Size Scaling (50% - 150%)
   const [menuSize, setMenuSize] = useState(100);
   const [showToastOnTrigger, setShowToastOnTrigger] = useState(false);
 
-  // Terminal Logs
   const [logs, setLogs] = useState<TerminalLog[]>([
     {
       id: 'init-1',
@@ -111,7 +103,6 @@ export default function App() {
   const [totalElapsedMs, setTotalElapsedMs] = useState<number>(22.5);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
 
-  // Add Log Helper
   const handleAddLog = (level: 'INFO' | 'SUCCESS' | 'GESTURE' | 'SHARED_STATE' | 'WARN' | 'ERROR', message: string, engine?: string) => {
     const newLog: TerminalLog = {
       id: `log-${Date.now()}-${Math.random()}`,
@@ -124,7 +115,6 @@ export default function App() {
     setTotalElapsedMs((prev) => Math.round((prev + 12.5) * 10) / 10);
   };
 
-  // 🔥 NATIVE EVENT LISTENER: Catches logs and status changes from Kotlin
   useEffect(() => {
     const logListener = MacroBridge.addListener('scriptLog', (data: any) => {
       handleAddLog('INFO', data.message, 'NATIVE');
@@ -147,14 +137,13 @@ export default function App() {
       logListener.remove();
       statusListener.remove();
     };
-  }, [totalElapsedMs]); // Keep dependency to maintain accurate timestamps
+  }, [totalElapsedMs]);
 
   const handleClearLogs = () => {
     setLogs([]);
     setTotalElapsedMs(0);
   };
 
-  // Toggle Macro Engine (Also stops the script if turned off)
   const handleToggleEngine = () => {
     const nextState = !engineActive;
     setEngineActive(nextState);
@@ -171,7 +160,6 @@ export default function App() {
     );
   };
 
-  // 🔥 EXECUTE PIPELINE: Converts steps to JSON and sends to Kotlin
   const handleExecutePipeline = async () => {
     setIsExecuting(true);
     setEngineActive(true);
@@ -182,11 +170,7 @@ export default function App() {
       pipelineSteps.forEach(step => {
         if (!step.enabled) return;
         
-        // Log the step to the native terminal
         nativeActions.push({ type: 'log', message: `Executing ${step.language.toUpperCase()} Block #${step.stepNumber}` });
-        
-        // Note: You can parse `step.code` here to extract specific X/Y coordinates
-        // For now, we will simulate a generic tap based on your shared state
         nativeActions.push({ type: 'tap', x: sharedState.lastTapX, y: sharedState.soruReady ? 800 : 1200 }); 
         nativeActions.push({ type: 'delay', ms: speedSettings.executionSpeedMs });
       });
@@ -199,15 +183,17 @@ export default function App() {
     }
   };
 
-  // 🔥 EXECUTE SINGLE ENGINE: Sends the code editor text to the WebView Engine
   const handleExecuteSingleEngine = async () => {
     setIsExecuting(true);
     setEngineActive(true);
     handleAddLog('INFO', `Starting single engine execution [Target: ${selectedSingleEngine.toUpperCase()}]...`, selectedSingleEngine.toUpperCase());
 
     try {
-      // Sends the raw code from the editor to QuickJsMacroRunner.kt
-      await MacroBridge.executeQuickJs({ script: singleEngineCode });
+      // 🔥 FIX: Send the sharedState object to Kotlin
+      await MacroBridge.executeQuickJs({ 
+        script: singleEngineCode,
+        sharedState: JSON.stringify(sharedState)
+      });
     } catch (e: any) {
       handleAddLog('ERROR', e.message, selectedSingleEngine.toUpperCase());
       setIsExecuting(false);
@@ -215,7 +201,6 @@ export default function App() {
     }
   };
 
-  // 🔥 EXECUTE PRE-MADE CONFIG: Fires taps based on saved coordinates
   const handleExecuteConfig = async (config: MacroConfig) => {
     setEngineActive(true);
     setIsExecuting(true);
@@ -238,7 +223,6 @@ export default function App() {
     }
   };
 
-  // Load Config into Single Engine Editor
   const handleLoadConfigIntoEditor = (config: MacroConfig) => {
     setSingleEngineCode(config.code);
     setSelectedSingleEngine('quickjs');
@@ -247,7 +231,6 @@ export default function App() {
     handleAddLog('INFO', `Loaded '${config.name}' into QuickJS editor.`, 'ROUTINE');
   };
 
-  // Duplicate / Clone Macro (QoL)
   const handleDuplicateConfig = (config: MacroConfig) => {
     const cloned: MacroConfig = {
       ...config,
@@ -258,7 +241,6 @@ export default function App() {
     handleAddLog('SUCCESS', `Duplicated macro: Created '${cloned.name}'.`, 'MACRO_MANAGER');
   };
 
-  // Open Export / Import Modal
   const handleOpenExportImport = (
     tab: 'export' | 'import' | 'presets' = 'export',
     initialLang: ExportFormat = 'json',
@@ -270,7 +252,6 @@ export default function App() {
     setIsExportImportOpen(true);
   };
 
-  // Import Callbacks
   const handleImportPipeline = (steps: PipelineStep[], newSpeed?: SpeedSettings, newState?: SharedStateData) => {
     setPipelineSteps(steps);
     if (newSpeed) setSpeedSettings(newSpeed);
@@ -312,7 +293,6 @@ export default function App() {
     handleAddLog('SUCCESS', `Added new block #${pipelineSteps.length + 1} (${step.language.toUpperCase()}) to pipeline.`, 'PIPELINE');
   };
 
-  // Separate Tool Triggers: Coordinates vs Pixel Color
   const handleOpenCoordsPickerForTarget = (configId: string, targetType: 'soru' | 'portal') => {
     setTargetBinding({ configId, targetType });
     setIsCoordsPickerOpen(true);
@@ -323,7 +303,6 @@ export default function App() {
     setIsColorCheckerOpen(true);
   };
 
-  // Apply Picked Coordinates (Auto-Scaled & Calibrated)
   const handleApplyCoordinates = (coords: { x: number; y: number }) => {
     if (targetBinding) {
       setConfigs((prev) =>
@@ -347,7 +326,6 @@ export default function App() {
     }
   };
 
-  // Apply Picked Pixel Color
   const handleApplyColor = (hexColor: string, coords: { x: number; y: number }) => {
     if (targetBinding) {
       setConfigs((prev) =>
@@ -375,7 +353,6 @@ export default function App() {
     setConfigs((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
   };
 
-  // Insert Gesture Recorder Code
   const handleInsertRecorderCode = (code: string, lang: ScriptLanguage) => {
     const newStep: PipelineStep = {
       id: `step-${Date.now()}`,
@@ -393,7 +370,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0b0c10] text-[#e0e2ec] font-sans pb-16">
-      {/* Top Header */}
       <Header
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -413,11 +389,9 @@ export default function App() {
         engineActive={engineActive}
       />
 
-      {/* Main Content Area */}
       <main className="max-w-xl mx-auto px-4 py-4 space-y-5">
         {activeTab === 'home' && (
           <>
-            {/* Macro Engine Status & Multi-Language Toggle */}
             <MacroEngineCard
               engineActive={engineActive}
               onToggleEngine={handleToggleEngine}
@@ -425,16 +399,13 @@ export default function App() {
               onToggleMultiLanguage={setMultiLanguage}
             />
 
-            {/* Native MacroBridge Control Panel (Accessibility / Overlay / Screen Capture / QuickJS) */}
             <MacroControlPanel />
 
-            {/* Timing & Speed Settings (Delay between macros in ms) */}
             <SpeedControls
               settings={speedSettings}
               onChange={setSpeedSettings}
             />
 
-            {/* Language Engine Body: Pipeline vs Single Engine */}
             {multiLanguage ? (
               <PipelineBuilder
                 steps={pipelineSteps}
@@ -482,7 +453,6 @@ export default function App() {
               />
             )}
 
-            {/* Terminal Output */}
             <OutputTerminal
               logs={logs}
               onClearLogs={handleClearLogs}
@@ -549,7 +519,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating Window HUD Overlay (SYSTEM_ALERT_WINDOW) */}
       <FloatingHudOverlay
         isOpen={isHudOpen}
         onClose={() => setIsHudOpen(false)}
@@ -568,7 +537,6 @@ export default function App() {
         menuSize={menuSize}
       />
 
-      {/* Tool 1: Dedicated Coordinate Picker Modal (Screen DPI & Resolution Calibration Gate Enforced) */}
       <CoordinatePickerModal
         isOpen={isCoordsPickerOpen}
         onClose={() => setIsCoordsPickerOpen(false)}
@@ -578,7 +546,6 @@ export default function App() {
         onSaveCalibration={setScreenCalibration}
       />
 
-      {/* Tool 2: Dedicated Pixel Color Checker Modal (Above-Thumb Floating Magnifier Loupe) */}
       <PixelColorCheckerModal
         isOpen={isColorCheckerOpen}
         onClose={() => setIsColorCheckerOpen(false)}
@@ -586,7 +553,6 @@ export default function App() {
         targetBinding={targetBinding}
       />
 
-      {/* Multi-Language Exporter & Importer (C++, Luau, QuickJS, JS, Kotlin, JSON) */}
       <ExportImportModal
         isOpen={isExportImportOpen}
         onClose={() => setIsExportImportOpen(false)}
@@ -607,19 +573,16 @@ export default function App() {
         onLog={handleAddLog}
       />
 
-      {/* Android Architecture & Code Exporter Modal */}
       <AndroidArchitectureModal
         isOpen={isArchitectureOpen}
         onClose={() => setIsArchitectureOpen(false)}
       />
 
-      {/* Accessibility Service & Permissions Modal */}
       <AccessibilityModal
         isOpen={isAccessibilityOpen}
         onClose={() => setIsAccessibilityOpen(false)}
       />
 
-      {/* Persistent Footer Status Bar */}
       <FooterBar
         engineActive={engineActive}
         multiLanguage={multiLanguage}
@@ -629,4 +592,4 @@ export default function App() {
       />
     </div>
   );
-    } 
+}
