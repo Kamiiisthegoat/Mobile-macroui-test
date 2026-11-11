@@ -3,31 +3,32 @@ package com.kamii.macroexecutor
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.util.Log
+import android.os.Handler
+import android.os.HandlerThread
 import android.view.accessibility.AccessibilityEvent
 
 class MacroAccessibilityService : AccessibilityService() {
-
     companion object {
-        private const val TAG = "MacroAccessibility"
-        @Volatile
-        var instance: MacroAccessibilityService? = null
+        @Volatile var instance: MacroAccessibilityService? = null
             private set
     }
+
+    private lateinit var backgroundThread: HandlerThread
+    private lateinit var backgroundHandler: Handler
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "Accessibility Service Connected")
+        backgroundThread = HandlerThread("GestureThread").apply { start() }
+        backgroundHandler = Handler(backgroundThread.looper)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) { /* no-op */ }
-
-    override fun onInterrupt() { /* no-op */ }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onInterrupt() {}
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        Log.i(TAG, "Accessibility Service Destroyed")
+        backgroundThread.quitSafely()
         super.onDestroy()
     }
 
@@ -36,39 +37,33 @@ class MacroAccessibilityService : AccessibilityService() {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
             .build()
-
-        val callback = object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                Log.d(TAG, "Tap COMPLETED at ($x, $y)")
-            }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                Log.e(TAG, "Tap CANCELLED at ($x, $y) - System blocked it")
-            }
-        }
-
-        // If this returns false, the system rejected the gesture immediately
-        val success = dispatchGesture(gesture, callback, null)
-        if (!success) Log.e(TAG, "dispatchGesture returned FALSE - failed to inject")
-        return success
+        return dispatchGesture(gesture, null, backgroundHandler)
     }
 
-    // (Keep your performLongPress and performSwipe below this, unchanged)
     fun performLongPress(x: Float, y: Float, durationMs: Long): Boolean {
-        val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
-            .build()
-        return dispatchGesture(gesture, null, null)
+        return performTap(x, y, durationMs)
     }
 
     fun performSwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
-        val path = Path().apply {
-            moveTo(x1, y1)
-            lineTo(x2, y2)
-        }
+        val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
             .build()
-        return dispatchGesture(gesture, null, null)
+        return dispatchGesture(gesture, null, backgroundHandler)
+    }
+
+    fun performDualSwipe(
+        x1: Float, y1: Float, x2: Float, y2: Float,
+        x3: Float, y3: Float, x4: Float, y4: Float,
+        durationMs: Long
+    ): Boolean {
+        val path1 = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
+        val path2 = Path().apply { moveTo(x3, y3); lineTo(x4, y4) }
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path1, 0L, durationMs))
+            .addStroke(GestureDescription.StrokeDescription(path2, 0L, durationMs))
+            .build()
+        return dispatchGesture(gesture, null, backgroundHandler)
     }
 }
