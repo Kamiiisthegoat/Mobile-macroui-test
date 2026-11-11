@@ -61,6 +61,28 @@ object ScreenCaptureHolder {
         }
     }
 
+    // 🔥 NEW
+    fun match3x3(x: Int, y: Int, color: Int, tolerance: Int): Boolean {
+        val reader = imageReader ?: return false
+        val image = try {
+            reader.acquireLatestImage()
+        } catch (e: Exception) {
+            Log.w(TAG, "acquireLatestImage failed", e); return false
+        } ?: return false
+
+        return try {
+            val plane = image.planes[0]
+            NativePixelEngine.match3x3(
+                plane.buffer, image.width, image.height, plane.rowStride,
+                x, y, color, tolerance
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "match3x3 failed", e); false
+        } finally {
+            runCatching { image.close() }
+        }
+    }
+
     fun matchPixels(triplets: IntArray, tolerance: Int): Boolean {
         if (triplets.isEmpty() || triplets.size % 3 != 0) return false
         val reader = imageReader ?: return false
