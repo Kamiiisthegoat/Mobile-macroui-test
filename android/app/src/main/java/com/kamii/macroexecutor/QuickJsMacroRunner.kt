@@ -56,6 +56,9 @@ object QuickJsMacroRunner {
             function toast(msg) { host.log("[TOAST] " + msg); }
             function captureScreen() { return { __fake_image: true }; }
             
+            // 🔥 FAST 3x3 SCANNER
+            function fastMatch3x3(x, y, hex, tolerance) { return host.match3x3(x, y, hex, tolerance); }
+            
             const images = { pixel: function(img, x, y) { return host.getPixel(x, y); } };
             const colors = {
                 parseColor: function(hex) { hex = hex.replace('#', ''); return (0xFF000000 | parseInt(hex, 16)) | 0; },
@@ -104,6 +107,7 @@ object QuickJsMacroRunner {
             window.press = press; window.tap = tap; window.longPress = longPress;
             window.swipe = swipe; window.toast = toast; window.captureScreen = captureScreen;
             window.images = images; window.colors = colors;
+            window.fastMatch3x3 = fastMatch3x3;
         })();
     """.trimIndent()
 
@@ -181,6 +185,14 @@ object QuickJsMacroRunner {
             MacroAccessibilityService.instance?.performSwipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs.toLong())
         }
         @JavascriptInterface fun getPixel(x: Int, y: Int): Int = ScreenCaptureHolder.getPixel(x, y)
+        
+        // 🔥 NEW
+        @JavascriptInterface fun match3x3(x: Int, y: Int, hexColor: String, tolerance: Int): Boolean {
+            return try {
+                val color = hexColor.removePrefix("#").toLong(16).toInt()
+                ScreenCaptureHolder.match3x3(x, y, color, tolerance)
+            } catch (_: Exception) { false }
+        }
         
         @JavascriptInterface fun overlayHide() { FloatingOverlayService.instance?.setOverlayVisibility(false) }
         @JavascriptInterface fun overlayShow() { FloatingOverlayService.instance?.setOverlayVisibility(true) }
