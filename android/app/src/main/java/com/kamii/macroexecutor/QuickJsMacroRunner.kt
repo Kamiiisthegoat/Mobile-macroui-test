@@ -13,7 +13,11 @@ object QuickJsMacroRunner {
     var lastExecutedScript: String? = null
 
     interface Listener {
-        fun onStarted(); fun onLog(message: String); fun onCompleted(); fun onStopped(); fun onError(message: String, stack: String?)
+        fun onStarted()
+        fun onLog(message: String)
+        fun onCompleted()
+        fun onStopped()
+        fun onError(message: String, stack: String?)
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -42,6 +46,10 @@ object QuickJsMacroRunner {
             function tap(x, y) { host.press(x, y, 50); }
             function longPress(x, y, duration) { host.longPress(x, y, duration || 1000); }
             function swipe(x1, y1, x2, y2, duration) { host.swipe(x1, y1, x2, y2, duration || 300); }
+            function toast(msg) { host.log("[TOAST] " + msg); }
+            function wait(ms) { return sleep(ms); } // 🔥 FIX: Added wait()
+            function exit() { throw new Error("Script exited by user"); }
+            
             function captureScreen() { return { __fake_image: true }; }
             const images = { pixel: function(img, x, y) { return host.getPixel(x, y); } };
             const colors = {
@@ -83,20 +91,27 @@ object QuickJsMacroRunner {
             function setStatus(m) { host.log('[status] ' + String(m)); }
 
             window.sleep = sleep; window.waitFor = waitFor; window.log = log; window.setStatus = setStatus; window.__cancel = __cancel;
-            window.press = press; window.tap = tap; window.longPress = longPress; window.swipe = swipe; window.captureScreen = captureScreen;
+            window.press = press; window.tap = tap; window.longPress = longPress; window.swipe = swipe; 
+            window.toast = toast; window.captureScreen = captureScreen; window.wait = wait; window.exit = exit;
             window.images = images; window.colors = colors; window.fastMatch3x3 = fastMatch3x3; window.dualSwipe = dualSwipe;
         })();
     """.trimIndent()
 
     @SuppressLint("SetJavaScriptEnabled")
     fun execute(context: Context, script: String, listener: Listener) {
-        lastExecutedScript = script; stop(silent = true); this.listener = listener; running.set(true)
+        lastExecutedScript = script
+        stop(silent = true)
+        this.listener = listener
+        running.set(true)
+
         mainHandler.post {
             val wv = WebView(context).apply {
                 settings.javaScriptEnabled = true
                 addJavascriptInterface(HostBridge(), "host")
                 webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView, url: String) { injectAndRun(view, script) }
+                    override fun onPageFinished(view: WebView, url: String) {
+                        injectAndRun(view, script)
+                    }
                 }
                 loadDataWithBaseURL(null, "<html><body></body></html>", "text/html", "UTF-8", null)
             }
@@ -127,11 +142,13 @@ object QuickJsMacroRunner {
     }
 
     fun stop(silent: Boolean = false) {
-        val wasRunning = running.getAndSet(false); if (!wasRunning) return
+        val wasRunning = running.getAndSet(false)
+        if (!wasRunning) return
         if (!silent) mainHandler.post { listener?.onStopped() }
         mainHandler.post {
             webView?.evaluateJavascript("try{__cancel()}catch(e){}", null)
-            val wv = webView; webView = null
+            val wv = webView
+            webView = null
             mainHandler.postDelayed({ runCatching { wv?.destroy() } }, 400L)
         }
     }
