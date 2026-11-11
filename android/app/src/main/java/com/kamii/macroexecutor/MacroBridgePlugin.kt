@@ -105,9 +105,13 @@ class MacroBridgePlugin : Plugin() {
     @PluginMethod
     fun executeQuickJs(call: PluginCall) {
         val script = call.getString("script") ?: return call.reject("Missing 'script' parameter")
+        // 🔥 FIX: Receive the sharedState JSON from React
+        val sharedStateJson = call.getString("sharedState") ?: "{}"
+        
         if (!accessibilityReady()) return call.reject("Accessibility service not connected")
         
-        QuickJsMacroRunner.execute(context, script, object : QuickJsMacroRunner.Listener {
+        // 🔥 FIX: Pass the sharedState to QuickJsMacroRunner
+        QuickJsMacroRunner.execute(context, script, sharedStateJson, object : QuickJsMacroRunner.Listener {
             override fun onStarted() { notifyListeners("scriptStatus", JSObject().put("state", "running")) }
             override fun onLog(message: String) { notifyListeners("scriptLog", JSObject().put("message", message)) }
             override fun onCompleted() { notifyListeners("scriptStatus", JSObject().put("state", "completed")) }
